@@ -17,6 +17,8 @@ def init_db():
     SQLModel.metadata.create_all(engine)
     print("Database initialized successfully")
 
+def create_default_user():
+
     default_email = "test@test.com"
     default_password = "test"
 
