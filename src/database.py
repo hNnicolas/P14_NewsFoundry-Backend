@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv 
 from sqlmodel import SQLModel, create_engine, Session, select
-from src.models import User
+from src.models import User, Chat
 import bcrypt
 
 load_dotenv()
@@ -28,7 +28,7 @@ def create_default_user():
 
         if not user:
             hashed = bcrypt.hashpw(default_password.encode("utf-8"), bcrypt.gensalt())
-            hashed = hashed.decode("utf-8")  # IMPORTANT — store as string
+            hashed = hashed.decode("utf-8") 
 
             session.add(
                 User(
