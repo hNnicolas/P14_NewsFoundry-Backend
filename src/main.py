@@ -13,7 +13,9 @@ from dotenv import load_dotenv
 from pydantic_ai import Agent
 import traceback
 
+# -------------------
 # Charger .env
+# -------------------
 load_dotenv()
 
 app = FastAPI()
@@ -24,10 +26,9 @@ app = FastAPI()
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://p14newsfoundry-frontend-production.up.railway.app", 
-    "https://p14-news-foundry-frontend.vercel.app",                          
+    "https://p14newsfoundry-frontend-production.up.railway.app",
+    "https://p14-news-foundry-frontend.vercel.app",
 ]
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,7 +37,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # -------------------
 # JWT config
@@ -77,50 +77,50 @@ def get_current_user(
     return user
 
 # -------------------
-# PydanticAI Agent Configuration
+# Variables Agent / API keys
 # -------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN")
-
-# Prioriser OpenAI car HuggingFace a des problèmes de compatibilité
 MODEL_NAME = os.getenv("PYDANTIC_AI_MODEL")
 
-
-# Déterminer le modèle à utiliser
 if not MODEL_NAME:
     if OPENAI_API_KEY:
         MODEL_NAME = "openai:gpt-4o-mini"
-        print("✅ Utilisation d'OpenAI par défaut (recommandé)")
+        print("✅ Utilisation d'OpenAI par défaut")
     elif HF_TOKEN:
         MODEL_NAME = "huggingface:HuggingFaceH4/zephyr-7b-beta"
-        print("⚠️  Utilisation de HuggingFace (peut être instable)")
+        print("⚠️  Utilisation HuggingFace (peut être instable)")
     else:
-        raise RuntimeError("❌ Aucune clé API configurée! Ajoutez OPENAI_API_KEY ou HF_TOKEN dans .env")
+        raise RuntimeError("❌ Aucune clé API configurée! Ajoutez OPENAI_API_KEY ou HF_TOKEN")
 
+if MODEL_NAME.startswith("openai:") and not OPENAI_API_KEY:
+    raise RuntimeError("❌ OPENAI_API_KEY requis pour OpenAI")
+if MODEL_NAME.startswith("huggingface:") and not HF_TOKEN:
+    raise RuntimeError("❌ HF_TOKEN requis pour HuggingFace")
 
-if MODEL_NAME.startswith("openai:"):
-    if not OPENAI_API_KEY:
-        raise RuntimeError("❌ OPENAI_API_KEY requis pour utiliser OpenAI")
-elif MODEL_NAME.startswith("huggingface:"):
-    if not HF_TOKEN:
-        raise RuntimeError("❌ HF_TOKEN requis pour utiliser HuggingFace")
+# -------------------
+# Agent "lazy init" (safe prod)
+# -------------------
+agent = None
 
-try:
-    # Créer l'agent avec system_prompt
-    agent = Agent(
-        model=MODEL_NAME,
-        system_prompt="Tu es l'assistant NewsFoundry. Réponds de manière concise et informative en français."
-    )
-except Exception as e:
-    print(f"❌ ERREUR d'initialisation: {e}")
-    raise
-
-print("===========================\n")
+def get_agent():
+    global agent
+    if agent is None:
+        try:
+            agent = Agent(
+                model=MODEL_NAME,
+                system_prompt="Tu es l'assistant NewsFoundry. Réponds de manière concise et informative en français."
+            )
+            print("✅ Agent initialisé")
+        except Exception as e:
+            tb = traceback.format_exc()
+            print(f"[ERREUR AGENT INIT]\n{tb}")
+            raise RuntimeError(f"Impossible d'initialiser l'agent: {e}")
+    return agent
 
 # -------------------
 # Routes
 # -------------------
-
 @app.get("/")
 def hello():
     return {"message": "👋 API NewsFoundry fonctionne !", "model": MODEL_NAME}
@@ -138,10 +138,7 @@ def login(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Email et mot de passe requis")
 
     user = db.exec(select(User).where(User.email == email)).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Identifiants invalides")
-
-    if not bcrypt.checkpw(password.encode("utf-8"), user.hashed_password.encode("utf-8")):
+    if not user or not bcrypt.checkpw(password.encode("utf-8"), user.hashed_password.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Identifiants invalides")
 
     token = jwt.encode({"sub": user.email}, SECRET_KEY, algorithm=ALGORITHM)
@@ -158,13 +155,9 @@ def create_chat(
 ):
     try:
         user_message = payload.get("message", "")
-        print(f"[CREATE CHAT] User: {current_user.email}")
-        print(f"[CREATE CHAT] Message: {user_message[:50]}...")
-
         if not user_message:
             raise HTTPException(status_code=400, detail="Message requis")
 
-        # Créer le chat
         chat = Chat(
             user_id=current_user.id,
             title="Nouvelle conversation",
@@ -173,45 +166,31 @@ def create_chat(
             updated_at=datetime.utcnow()
         )
 
-        # Appeler l'agent
+        # Agent
         try:
-            print("[AGENT] Envoi de la requête...")
-            result = agent.run_sync(user_message)
-            
-            # Extraire la réponse
-            if hasattr(result, 'data'):
-                assistant_response = result.data
-            elif hasattr(result, 'output'):
-                assistant_response = result.output
+            assistant_response = get_agent().run_sync(user_message)
+            if hasattr(assistant_response, 'data'):
+                assistant_response = assistant_response.data
+            elif hasattr(assistant_response, 'output'):
+                assistant_response = assistant_response.output
             else:
-                assistant_response = str(result)
-            
-            print(f"[AGENT] Réponse reçue: {assistant_response[:100]}...")
-            
+                assistant_response = str(assistant_response)
         except Exception as e_agent:
             tb = traceback.format_exc()
             print(f"[ERREUR AGENT]\n{tb}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Erreur du modèle IA: {str(e_agent)}"
-            )
+            assistant_response = "Désolé, l'assistant n'a pas pu répondre"
 
-        # Ajouter la réponse au chat
         chat.messages.append({"role": "assistant", "content": assistant_response})
 
-        # Sauvegarder
         db.add(chat)
         db.commit()
         db.refresh(chat)
-
-        print(f"[CREATE CHAT] ✅ Chat créé: ID={chat.id}")
 
         return {
             "chat_id": chat.id,
             "assistant_response": assistant_response,
             "messages": chat.messages
         }
-
     except HTTPException:
         raise
     except Exception as e:
@@ -221,22 +200,13 @@ def create_chat(
         raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------
-# Récupérer un chat
-# -------------------
-# -------------------
-# Lister tous les chats d'un utilisateur
+# Lister tous les chats
 # -------------------
 @app.get("/chats")
-def list_chats(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+def list_chats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     chats = db.exec(
-        select(Chat)
-        .where(Chat.user_id == current_user.id)
-        .order_by(Chat.updated_at.desc()) 
+        select(Chat).where(Chat.user_id == current_user.id).order_by(Chat.updated_at.desc())
     ).all()
-    
     return [
         {
             "chat_id": chat.id,
@@ -249,21 +219,15 @@ def list_chats(
     ]
 
 # -------------------
-# Récupérer l'historique d'un chat
+# Récupérer un chat
 # -------------------
 @app.get("/chats/{chat_id}")
-def get_chat(
-    chat_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+def get_chat(chat_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     chat = db.exec(
         select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
     ).first()
-    
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
-    
     return {
         "chat_id": chat.id,
         "title": chat.title,
@@ -272,92 +236,65 @@ def get_chat(
         "updated_at": chat.updated_at.isoformat() if chat.updated_at else None
     }
 
-
 # -------------------
 # Ajouter un message
 # -------------------
 @app.post("/chats/{chat_id}/messages")
-def add_message(
-    chat_id: int,
-    payload: dict,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+def add_message(chat_id: int, payload: dict, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     message_content = payload.get("message", "")
     if not message_content:
         raise HTTPException(status_code=400, detail="Message requis")
 
-    # Récupérer le chat
     chat = db.exec(
         select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
     ).first()
-
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
 
     if chat.messages is None:
         chat.messages = []
-
-    # Ajouter le message utilisateur
     chat.messages.append({"role": "user", "content": message_content})
-
-    # Mettre à jour updated_at
     chat.updated_at = datetime.utcnow()
 
-    # Commit initial pour l'utilisateur
     try:
         db.add(chat)
         db.commit()
         db.refresh(chat)
-        print(f"[ADD MESSAGE] ✅ Message utilisateur ajouté au chat {chat_id}")
-    except Exception as e:
+    except Exception:
         db.rollback()
-        tb = traceback.format_exc()
-        print(f"[ERREUR COMMIT USER MESSAGE]\n{tb}")
-        raise HTTPException(status_code=500, detail="Erreur lors de l'ajout du message utilisateur")
+        raise HTTPException(status_code=500, detail="Erreur ajout message utilisateur")
 
-    # Appeler l'agent pour la réponse
+    # Agent
     try:
-        print("[AGENT] Envoi de la requête...")
-        result = agent.run_sync(message_content)
-        if hasattr(result, 'data'):
-            assistant_response = result.data
-        elif hasattr(result, 'output'):
-            assistant_response = result.output
+        assistant_response = get_agent().run_sync(message_content)
+        if hasattr(assistant_response, 'data'):
+            assistant_response = assistant_response.data
+        elif hasattr(assistant_response, 'output'):
+            assistant_response = assistant_response.output
         else:
-            assistant_response = str(result)
-        print(f"[AGENT] Réponse reçue: {assistant_response[:100]}...")
+            assistant_response = str(assistant_response)
     except Exception as e_agent:
         tb = traceback.format_exc()
         print(f"[ERREUR AGENT]\n{tb}")
-        assistant_response = "Désolé, l'assistant n'a pas pu répondre pour le moment."
+        assistant_response = "Désolé, l'assistant n'a pas pu répondre"
 
-    # Ajouter la réponse de l'assistant
     chat.messages.append({"role": "assistant", "content": assistant_response})
     chat.updated_at = datetime.utcnow()
 
-    # Commit final pour la réponse de l'assistant
     try:
         db.add(chat)
         db.commit()
         db.refresh(chat)
-        print(f"[ADD MESSAGE] ✅ Réponse assistant ajoutée au chat {chat_id}")
-    except Exception as e:
+    except Exception:
         db.rollback()
-        tb = traceback.format_exc()
-        print(f"[ERREUR COMMIT ASSISTANT MESSAGE]\n{tb}")
-        raise HTTPException(status_code=500, detail="Erreur lors de l'ajout de la réponse assistant")
+        raise HTTPException(status_code=500, detail="Erreur ajout réponse assistant")
 
-    return {
-        "assistant_response": assistant_response,
-        "messages": chat.messages
-    }
-
+    return {"assistant_response": assistant_response, "messages": chat.messages}
 
 # -------------------
-# Lancement du serveur
+# Lancement serveur prod
 # -------------------
 if __name__ == "__main__":
     init_db()
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run("src.main:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run("src.main:app", host="0.0.0.0", port=port)
