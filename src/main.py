@@ -77,9 +77,19 @@ def get_current_user(
 # -------------------
 # PydanticAI Agent Configuration
 # -------------------
+# -------------------
+# PydanticAI Agent Configuration
+# -------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN")
 MODEL_NAME = os.getenv("PYDANTIC_AI_MODEL")
+
+# 🔹 Vérification des variables
+print("===============================")
+print("🔹 OPENAI_API_KEY:", OPENAI_API_KEY)
+print("🔹 HF_TOKEN:", HF_TOKEN)
+print("🔹 PYDANTIC_AI_MODEL:", MODEL_NAME)
+print("===============================")
 
 # Vérification des clés
 if not MODEL_NAME:
@@ -94,11 +104,6 @@ if not MODEL_NAME:
             "❌ Aucune clé API configurée! Ajoutez OPENAI_API_KEY ou HF_TOKEN dans l'environnement Railway"
         )
 
-# Vérification cohérence modèle / clé
-if MODEL_NAME.startswith("openai:") and not OPENAI_API_KEY:
-    raise RuntimeError("❌ OPENAI_API_KEY requis pour utiliser OpenAI")
-elif MODEL_NAME.startswith("huggingface:") and not HF_TOKEN:
-    raise RuntimeError("❌ HF_TOKEN requis pour utiliser HuggingFace")
 
 # Initialisation de l'agent
 try:
