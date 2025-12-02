@@ -23,7 +23,7 @@ app = FastAPI()
 # -------------------
 origins = [
     "http://localhost:3000",
-    os.getenv("FRONTEND_URL", "https://p14newsfoundry.vercel.app"),
+    os.getenv("FRONTEND_URL", "https://p14-news-foundry-frontend.vercel.app/"),
 ]
 
 app.add_middleware(
