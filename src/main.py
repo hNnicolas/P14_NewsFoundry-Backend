@@ -153,7 +153,9 @@ def create_chat(
 
         # Appeler l'agent
         try:
+            print(f"[AGENT] Message utilisateur: {user_message[:100]}...")
             result = agent.run_sync(user_message)
+            print("[AGENT] Réponse reçue")
             if hasattr(result, 'data'):
                 assistant_response = result.data
             elif hasattr(result, 'output'):
@@ -292,6 +294,13 @@ def add_message(
 # Lancement du serveur
 # -------------------
 if __name__ == "__main__":
-    init_db()
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run("src.main:app", host="0.0.0.0", port=port)
+    try:
+        print("🔧 Initialisation DB...")
+        init_db()
+        port = int(os.getenv("PORT", 8000))
+        print(f"🚀 Démarrage du serveur sur 0.0.0.0:{port}...")
+        uvicorn.run("src.main:app", host="0.0.0.0", port=port)
+    except Exception:
+        tb = traceback.format_exc()
+        print(f"[ERREUR SERVER START]\n{tb}")
+        raise
