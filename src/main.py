@@ -86,9 +86,10 @@ MODEL_NAME = os.getenv("PYDANTIC_AI_MODEL")
 
 # 🔹 Vérification des variables
 print("===============================")
-print("🔹 OPENAI_API_KEY:", OPENAI_API_KEY)
-print("🔹 HF_TOKEN:", HF_TOKEN)
-print("🔹 PYDANTIC_AI_MODEL:", MODEL_NAME)
+print("🔹 OPENAI_API_KEY:", os.getenv("OPENAI_API_KEY"))
+print("🔹 HF_TOKEN:", os.getenv("HF_TOKEN"))
+print("🔹 PYDANTIC_AI_MODEL:", os.getenv("PYDANTIC_AI_MODEL"))
+
 print("===============================")
 
 # Vérification des clés
@@ -133,19 +134,44 @@ def health():
 def login(payload: dict, db: Session = Depends(get_db)):
     email = payload.get("email")
     password = payload.get("password")
+# -------------------
+# PydanticAI Agent Configuration
+# -------------------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
+MODEL_NAME = os.getenv("PYDANTIC_AI_MODEL", "").strip()
 
-    if not email or not password:
-        raise HTTPException(status_code=400, detail="Email et mot de passe requis")
+# Vérification des variables
+print("===============================")
+print("OPENAI_API_KEY:", repr(OPENAI_API_KEY))
+print("HF_TOKEN:", repr(HF_TOKEN))
+print("PYDANTIC_AI_MODEL:", repr(MODEL_NAME))
+print("===============================")
 
-    user = db.exec(select(User).where(User.email == email)).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Identifiants invalides")
+# Vérification et fallback
+if not MODEL_NAME:
+    if OPENAI_API_KEY:
+        MODEL_NAME = "openai:gpt-4o-mini"
+        print("Utilisation d'OpenAI par défaut")
+    elif HF_TOKEN:
+        MODEL_NAME = "huggingface:HuggingFaceH4/zephyr-7b-beta"
+        print("Utilisation de HuggingFace (peut être instable)")
+    else:
+        raise RuntimeError(
+            "❌ Aucune clé API configurée! Ajoutez OPENAI_API_KEY ou HF_TOKEN dans l'environnement Railway"
+        )
 
-    if not bcrypt.checkpw(password.encode("utf-8"), user.hashed_password.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Identifiants invalides")
+# Initialisation de l'agent
+try:
+    agent = Agent(
+        model=MODEL_NAME,
+        system_prompt="Tu es l'assistant NewsFoundry. Réponds de manière concise et informative en français."
+    )
+except Exception as e:
+    print(f"❌ ERREUR d'initialisation de l'agent: {e}")
+    raise
 
-    token = jwt.encode({"sub": user.email}, SECRET_KEY, algorithm=ALGORITHM)
-    return {"token": token}
+print("===========================\n")
 
 # -------------------
 # Créer un chat
