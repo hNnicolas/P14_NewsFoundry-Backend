@@ -74,6 +74,19 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Utilisateur introuvable")
     return user
 
+@app.get("/env")
+def show_env():
+    import os
+    return {
+        "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
+        "HF_TOKEN": os.getenv("HF_TOKEN"),
+        "PYDANTIC_AI_MODEL": os.getenv("PYDANTIC_AI_MODEL"),
+        "SECRET_KEY": os.getenv("SECRET_KEY"),
+        "FRONTEND_URL": os.getenv("FRONTEND_URL"),
+        "PORT": os.getenv("PORT")
+    }
+
+
 # -------------------
 # PydanticAI Agent Configuration
 # -------------------
