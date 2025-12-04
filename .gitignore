@@ -20,3 +20,6 @@ __pycache__/
 .env
 .env.local
 .python-version
+
+# macOS
+.DS_Store

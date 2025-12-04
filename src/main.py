@@ -24,13 +24,13 @@ app = FastAPI()
 # CORS
 # -------------------
 origins = [
-    "http://localhost:3000",
-    os.getenv("FRONTEND_URL", "https://p14newsfoundry.vercel.app"),
+    "http://localhost:3000",  
+    "https://p14-news-foundry-frontend.vercel.app",  
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin for origin in origins if origin],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -78,18 +78,12 @@ def get_current_user(
 def show_env():
     import os
     return {
-        "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
-        "HF_TOKEN": os.getenv("HF_TOKEN"),
+        "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
+        "HF_TOKEN": bool(os.getenv("HF_TOKEN")),
         "PYDANTIC_AI_MODEL": os.getenv("PYDANTIC_AI_MODEL"),
-        "SECRET_KEY": os.getenv("SECRET_KEY"),
-        "FRONTEND_URL": os.getenv("FRONTEND_URL"),
-        "PORT": os.getenv("PORT")
+        "SECRET_KEY": bool(os.getenv("SECRET_KEY"))
     }
 
-
-# -------------------
-# PydanticAI Agent Configuration
-# -------------------
 # -------------------
 # PydanticAI Agent Configuration
 # -------------------
@@ -97,11 +91,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN")
 MODEL_NAME = os.getenv("PYDANTIC_AI_MODEL")
 
-# 🔹 Vérification des variables
-print("===============================")
-print("🔹 OPENAI_API_KEY:", os.getenv("OPENAI_API_KEY"))
-print("🔹 HF_TOKEN:", os.getenv("HF_TOKEN"))
-print("🔹 PYDANTIC_AI_MODEL:", os.getenv("PYDANTIC_AI_MODEL"))
 
 print("===============================")
 
