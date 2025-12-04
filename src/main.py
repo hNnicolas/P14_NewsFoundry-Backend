@@ -74,39 +74,23 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Utilisateur introuvable")
     return user
 
-@app.get("/env")
-def show_env():
-    import os
-    return {
-        "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
-        "HF_TOKEN": bool(os.getenv("HF_TOKEN")),
-        "PYDANTIC_AI_MODEL": os.getenv("PYDANTIC_AI_MODEL"),
-        "SECRET_KEY": bool(os.getenv("SECRET_KEY"))
-    }
-
 # -------------------
-# PydanticAI Agent Configuration
+# Charger les clés IA AVANT toute utilisation
 # -------------------
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-HF_TOKEN = os.getenv("HF_TOKEN")
-MODEL_NAME = os.getenv("PYDANTIC_AI_MODEL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
+MODEL_NAME = os.getenv("PYDANTIC_AI_MODEL", "").strip()
 
-
-print("===============================")
-
-# Vérification des clés
+# Vérification et fallback
 if not MODEL_NAME:
     if OPENAI_API_KEY:
         MODEL_NAME = "openai:gpt-4o-mini"
-        print("✅ Utilisation d'OpenAI par défaut")
     elif HF_TOKEN:
         MODEL_NAME = "huggingface:HuggingFaceH4/zephyr-7b-beta"
-        print("⚠️ Utilisation de HuggingFace (peut être instable)")
     else:
         raise RuntimeError(
             "❌ Aucune clé API configurée! Ajoutez OPENAI_API_KEY ou HF_TOKEN dans l'environnement Railway"
         )
-
 
 # Initialisation de l'agent
 try:
@@ -118,7 +102,6 @@ except Exception as e:
     print(f"❌ ERREUR d'initialisation de l'agent: {e}")
     raise
 
-print("===========================\n")
 
 # -------------------
 # Routes
@@ -136,6 +119,7 @@ def health():
 def login(payload: dict, db: Session = Depends(get_db)):
     email = payload.get("email")
     password = payload.get("password")
+    
 # -------------------
 # PydanticAI Agent Configuration
 # -------------------
@@ -143,21 +127,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 MODEL_NAME = os.getenv("PYDANTIC_AI_MODEL", "").strip()
 
-# Vérification des variables
-print("===============================")
-print("OPENAI_API_KEY:", repr(OPENAI_API_KEY))
-print("HF_TOKEN:", repr(HF_TOKEN))
-print("PYDANTIC_AI_MODEL:", repr(MODEL_NAME))
-print("===============================")
-
 # Vérification et fallback
 if not MODEL_NAME:
     if OPENAI_API_KEY:
         MODEL_NAME = "openai:gpt-4o-mini"
-        print("Utilisation d'OpenAI par défaut")
     elif HF_TOKEN:
         MODEL_NAME = "huggingface:HuggingFaceH4/zephyr-7b-beta"
-        print("Utilisation de HuggingFace (peut être instable)")
     else:
         raise RuntimeError(
             "❌ Aucune clé API configurée! Ajoutez OPENAI_API_KEY ou HF_TOKEN dans l'environnement Railway"
@@ -172,9 +147,8 @@ try:
 except Exception as e:
     print(f"❌ ERREUR d'initialisation de l'agent: {e}")
     raise
-
-print("===========================\n")
-
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email et mot de passe requis")
 # -------------------
 # Créer un chat
 # -------------------
