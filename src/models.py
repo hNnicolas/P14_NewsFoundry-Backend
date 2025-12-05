@@ -1,3 +1,4 @@
+# src/models.py
 from typing import Optional, List
 from sqlmodel import SQLModel, Field, Relationship, Column
 from sqlalchemy import JSON
@@ -27,7 +28,8 @@ class Chat(SQLModel, table=True):
 
     # Historique des messages suivi par SQLAlchemy
     messages: List[dict] = Field(
-        sa_column=Column(MutableList.as_mutable(JSON), default_factory=list)
+        default_factory=list,
+        sa_column=Column(MutableList.as_mutable(JSON))
     )
 
     # Relation avec l'utilisateur
@@ -42,5 +44,5 @@ class SystemPrompt(SQLModel, table=True):
     afin que le LLM réponde avec des informations récentes.
     """
     id: Optional[int] = Field(default=None, primary_key=True)
-    content: str
+    prompt_text: str
     updated_at: datetime = Field(default_factory=datetime.utcnow)

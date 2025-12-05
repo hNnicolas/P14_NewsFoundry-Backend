@@ -1,5 +1,5 @@
+# src/main.py
 import requests
-
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,13 +11,12 @@ import bcrypt
 import uvicorn
 import os
 from datetime import datetime
+from pydantic_ai import Agent, RunContext
 
 # Charger dotenv uniquement si le fichier existe (local dev)
 if os.path.exists(".env"):
     from dotenv import load_dotenv
     load_dotenv()
-
-from pydantic_ai import Agent, Tool
 
 app = FastAPI()
 
@@ -92,14 +91,10 @@ if not MODEL_NAME:
             "❌ Aucune clé API configurée! Ajoutez OPENAI_API_KEY ou HF_TOKEN dans l'environnement Railway"
         )
 
-try:
-    agent = Agent(
-        model=MODEL_NAME,
-        system_prompt="Tu es l'assistant NewsFoundry. Réponds de manière concise et informative en français."
-    )
-except Exception as e:
-    print(f"❌ ERREUR d'initialisation de l'agent: {e}")
-    raise
+agent = Agent(
+    model=MODEL_NAME,
+    system_prompt="Tu es l'assistant NewsFoundry. Réponds de manière concise et informative en français."
+)
 
 # -------------------
 # Clé API World News
@@ -108,13 +103,19 @@ WORLD_NEWS_API_KEY = os.getenv("WORLD_NEWS_API_KEY")
 WORLD_NEWS_URL = "https://api.worldnewsapi.com/top-news"
 
 # -------------------
-# Tools : recherche d'articles
+# Tool : recherche d’articles
 # -------------------
-def search_news_tool(query: str) -> str:
+@agent.tool
+def search_news(context: RunContext = None, query: str = "") -> str:
+    """Recherche des articles sur un sujet donné, renvoie titres + descriptions."""
+    if not query:
+        return "Aucun sujet fourni."
+
     if not WORLD_NEWS_API_KEY:
-        raise HTTPException(status_code=500, detail="Clé API World News non configurée")
+        raise HTTPException(status_code=500, detail="Clé API World News manquante")
+
     try:
-        response = requests.get(
+        r = requests.get(
             "https://api.worldnewsapi.com/search-news",
             params={
                 "apiKey": WORLD_NEWS_API_KEY,
@@ -124,24 +125,19 @@ def search_news_tool(query: str) -> str:
                 "pageSize": 5
             }
         )
-        response.raise_for_status()
-        data = response.json()
+        r.raise_for_status()
+        data = r.json()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur World News API: {e}")
 
     articles = data.get("articles", [])
     if not articles:
-        return "Aucun article trouvé pour ce sujet."
-    
-    return "\n".join([f"- {a.get('title','')} : {a.get('description','')}" for a in articles])
+        return "Aucun article trouvé."
 
-search_tool = Tool.from_function(
-    search_news_tool,
-    name="search_news",
-    description="Permet de rechercher des articles sur un sujet spécifique."
-)
-
-agent.add_tools([search_tool])
+    return "\n".join(
+        f"- {a.get('title','')} : {a.get('description','')}"
+        for a in articles
+    )
 
 # -------------------
 # Routes simples
@@ -188,7 +184,6 @@ def create_chat(payload: dict = {}, current_user: User = Depends(get_current_use
         updated_at=datetime.utcnow()
     )
 
-    # Inclure prompt système actualités
     system_prompt = db.exec(select(SystemPrompt)).first()
     full_prompt = system_prompt.prompt_text if system_prompt else "Tu es l'assistant NewsFoundry."
 
