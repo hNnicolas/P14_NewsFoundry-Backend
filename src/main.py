@@ -1,3 +1,5 @@
+import requests
+
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
