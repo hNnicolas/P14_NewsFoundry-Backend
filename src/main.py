@@ -144,8 +144,12 @@ def create_chat(payload: dict = {}, current_user: User = Depends(get_current_use
         updated_at=datetime.utcnow()
     )
 
+    # Inclure prompt système actualités
+    system_prompt = db.exec(select(SystemPrompt)).first()
+    full_prompt = system_prompt.prompt_text if system_prompt else "Tu es l'assistant NewsFoundry."
+
     try:
-        result = agent.run_sync(user_message)
+        result = agent.run_sync(user_message, system_prompt=full_prompt)
         assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
     except Exception as e_agent:
         raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
@@ -213,26 +217,63 @@ def add_message(
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
 
-    # Ajout du message utilisateur
     chat.messages.append({"role": "user", "content": message_content})
 
-    # Appel à l'IA
+    # Inclure prompt système actualités
+    system_prompt = db.exec(select(SystemPrompt)).first()
+    full_prompt = system_prompt.prompt_text if system_prompt else "Tu es l'assistant NewsFoundry."
+
     try:
-        result = agent.run_sync(message_content)
+        result = agent.run_sync(message_content, system_prompt=full_prompt)
         assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
     except Exception as e_agent:
         raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
 
-    # Ajout de la réponse de l'assistant
     chat.messages.append({"role": "assistant", "content": assistant_response})
     chat.updated_at = datetime.utcnow()
-
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
     return {"assistant_response": assistant_response, "messages": chat.messages}
 
+# -------------------
+# Endpoint pour récupérer les actualités et mettre à jour le prompt système
+# -------------------
+WORLD_NEWS_API_KEY = os.getenv("WORLD_NEWS_API_KEY") 
+WORLD_NEWS_URL = "https://api.worldnewsapi.com/top-news"  
+
+@app.get("/top-news")
+def get_top_news(db: Session = Depends(get_db)):
+    if not WORLD_NEWS_API_KEY:
+        raise HTTPException(status_code=500, detail="Clé API World News non configurée")
+    
+    # Appel à la World News API
+    try:
+        response = requests.get(WORLD_NEWS_URL, params={"apiKey": WORLD_NEWS_API_KEY})
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
+
+    # Extraire titre + résumé
+    articles = data.get("articles", [])[:10]  # limiter à 10 articles
+    news_summary = "\n".join([f"- {a.get('title', '')}: {a.get('description', '')}" for a in articles])
+
+    # Sauvegarder le prompt système en DB
+    system_prompt = db.exec(select(SystemPrompt)).first()
+    prompt_text = f"Tu es l'assistant NewsFoundry. Voici les dernières actualités:\n{news_summary}"
+    if system_prompt:
+        system_prompt.content = prompt_text
+        system_prompt.updated_at = datetime.utcnow()
+        db.add(system_prompt)
+    else:
+        system_prompt = SystemPrompt(prompt_text=prompt_text)
+        db.add(system_prompt)
+    db.commit()
+    db.refresh(system_prompt)
+
+    return {"top_news_summary": news_summary, "updated_at": system_prompt.updated_at.isoformat()}
 
 # -------------------
 # Lancement du serveur

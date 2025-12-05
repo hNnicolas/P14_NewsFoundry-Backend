@@ -32,3 +32,15 @@ class Chat(SQLModel, table=True):
 
     # Relation avec l'utilisateur
     user: Optional[User] = Relationship(back_populates="chats")
+    
+# --------------------------
+# Modèle SystemPrompt
+# --------------------------
+class SystemPrompt(SQLModel, table=True):
+    """
+    Stocke le prompt système à jour incluant les dernières actualités
+    afin que le LLM réponde avec des informations récentes.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    content: str
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
