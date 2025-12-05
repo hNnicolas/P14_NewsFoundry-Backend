@@ -11,7 +11,8 @@ import bcrypt
 import uvicorn
 import os
 from datetime import datetime
-from pydantic_ai import Agent, RunContext
+from pydantic import BaseModel, Field  
+from pydantic_ai import Agent, RunContext, output
 
 # Charger dotenv uniquement si le fichier existe (local dev)
 if os.path.exists(".env"):
@@ -103,26 +104,50 @@ WORLD_NEWS_API_KEY = os.getenv("WORLD_NEWS_API_KEY")
 WORLD_NEWS_URL = "https://api.worldnewsapi.com/top-news"
 
 # -------------------
+# Agent Revue de Presse
+# -------------------
+class PressReviewOutputModel(BaseModel):
+    title: str = Field(description="Titre de la revue de presse")
+    summary: str = Field(description="Synthèse générale de la revue de presse")
+    articles: list = Field(description="Liste des articles synthétisés, chaque article a title et summary")
+
+press_review_agent = Agent(
+    model=MODEL_NAME,
+    system_prompt=(
+        "Tu es un assistant qui génère une revue de presse en français à partir "
+        "de l'historique de discussion. Structure la sortie comme un titre, une "
+        "synthèse générale, et des synthèses pour chaque article."
+    )
+)
+
+# -------------------
+# Endpoint FastAPI pour générer la revue de presse
+# -------------------
+@app.post("/press-review", response_model=PressReviewOutputModel)
+def generate_press_review(prompt: str, user=Depends(get_current_user)):
+    # On utilise agent.call() avec parse_with pour obtenir un objet Pydantic
+    response = press_review_agent.call(
+        prompt=prompt,
+        parse_with=PressReviewOutputModel
+    )
+    return response
+
+# -------------------
 # Tool : recherche d’articles
 # -------------------
 @agent.tool
 def search_news(context: RunContext = None, query: str = "") -> str:
-    """Recherche des articles sur un sujet donné, renvoie titres + descriptions."""
-    if not query:
-        return "Aucun sujet fourni."
-
+    """Retourne les articles récents. Filtre par mot-clé si query fourni."""
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API World News manquante")
 
     try:
         r = requests.get(
-            "https://api.worldnewsapi.com/search-news",
+            WORLD_NEWS_URL,
             params={
                 "apiKey": WORLD_NEWS_API_KEY,
-                "q": query,
                 "lang": "en",
-                "sortBy": "relevance",
-                "pageSize": 5
+                "pageSize": 50
             }
         )
         r.raise_for_status()
@@ -131,12 +156,20 @@ def search_news(context: RunContext = None, query: str = "") -> str:
         raise HTTPException(status_code=500, detail=f"Erreur World News API: {e}")
 
     articles = data.get("articles", [])
+    if query:
+        query_lower = query.lower()
+        articles = [
+            a for a in articles
+            if query_lower in (a.get("title") or "").lower() or
+               query_lower in (a.get("description") or "").lower()
+        ]
+
     if not articles:
         return "Aucun article trouvé."
 
     return "\n".join(
         f"- {a.get('title','')} : {a.get('description','')}"
-        for a in articles
+        for a in articles[:10]
     )
 
 # -------------------
@@ -369,6 +402,41 @@ def search_news(query: str, db: Session = Depends(get_db)):
     ]
     
     return {"query": query, "articles": news_summary}
+
+@app.post("/chats/{chat_id}/press-review")
+def generate_press_review(chat_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Récupérer le chat
+    chat = db.exec(select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))).first()
+    if not chat:
+        raise HTTPException(status_code=404, detail="Discussion introuvable")
+
+    # Construire le texte à synthétiser à partir des messages
+    chat_history_text = "\n".join(f"{m['role']}: {m['content']}" for m in chat.messages)
+
+    # Générer la revue de presse
+    try:
+        result = press_review_agent.run_sync(chat_history_text)
+        review: PressReviewOutput = result.data  # correspond à notre Output model
+    except Exception as e_agent:
+        raise HTTPException(status_code=500, detail=f"Erreur génération revue de presse: {str(e_agent)}")
+
+    # Stocker dans le chat
+    chat.press_review_title = review.title
+    chat.press_review_summary = review.summary
+    chat.press_review_articles = review.articles
+    chat.updated_at = datetime.utcnow()
+
+    db.add(chat)
+    db.commit()
+    db.refresh(chat)
+
+    return {
+        "chat_id": chat.id,
+        "press_review_title": chat.press_review_title,
+        "press_review_summary": chat.press_review_summary,
+        "press_review_articles": chat.press_review_articles
+    }
+
 
 # -------------------
 # Lancement du serveur
