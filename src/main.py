@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 from src.database import init_db, engine
-from src.models import User, Chat
+from src.models import User, Chat, SystemPrompt
 import jwt
 import bcrypt
 import uvicorn
@@ -17,7 +17,7 @@ if os.path.exists(".env"):
     from dotenv import load_dotenv
     load_dotenv()
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, Tool
 
 app = FastAPI()
 
@@ -100,6 +100,49 @@ try:
 except Exception as e:
     print(f"❌ ERREUR d'initialisation de l'agent: {e}")
     raise
+
+# -------------------
+# Clé API World News
+# -------------------
+WORLD_NEWS_API_KEY = os.getenv("WORLD_NEWS_API_KEY")
+WORLD_NEWS_URL = "https://api.worldnewsapi.com/top-news"
+
+# -------------------
+# Tools : recherche d'articles
+# -------------------
+def search_news_tool(query: str) -> str:
+    if not WORLD_NEWS_API_KEY:
+        raise HTTPException(status_code=500, detail="Clé API World News non configurée")
+    try:
+        response = requests.get(
+            "https://api.worldnewsapi.com/search-news",
+            params={
+                "apiKey": WORLD_NEWS_API_KEY,
+                "q": query,
+                "lang": "en",
+                "sortBy": "relevance",
+                "pageSize": 5
+            }
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
+
+    articles = data.get("articles", [])
+    if not articles:
+        return "Aucun article trouvé pour ce sujet."
+    
+    return "\n".join([f"- {a.get('title','')} : {a.get('description','')}" for a in articles])
+
+search_tool = Tool(
+    name="search_news",
+    description="Permet de rechercher des articles sur un sujet spécifique.",
+    func=search_news_tool,
+)
+
+# Ajouter le tool à l'agent
+agent.add_tools([search_tool])
 
 # -------------------
 # Routes simples
@@ -242,40 +285,96 @@ def add_message(
 # -------------------
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
 # -------------------
-WORLD_NEWS_API_KEY = os.getenv("WORLD_NEWS_API_KEY") 
-WORLD_NEWS_URL = "https://api.worldnewsapi.com/top-news"  
 
 @app.get("/top-news")
-def get_top_news(db: Session = Depends(get_db)):
+def get_top_news(db: Session = Depends(get_db), lang: str = "en", country: str = "us"):
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
     
-    # Appel à la World News API
+    params = {
+        "api-key": WORLD_NEWS_API_KEY,
+        "category": "general",
+        "language": lang,
+        "source-country": country
+    }
+
     try:
-        response = requests.get(WORLD_NEWS_URL, params={"apiKey": WORLD_NEWS_API_KEY})
+        response = requests.get(WORLD_NEWS_URL, params=params)
         response.raise_for_status()
         data = response.json()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
 
-    # Extraire titre + résumé
-    articles = data.get("articles", [])[:10]  # limiter à 10 articles
-    news_summary = "\n".join([f"- {a.get('title', '')}: {a.get('description', '')}" for a in articles])
+    articles = data.get("articles", [])[:10] 
+    if not articles:
+        raise HTTPException(status_code=404, detail="Aucun article trouvé")
 
-    # Sauvegarder le prompt système en DB
+    raw_news = "\n".join([
+        f"- {a.get('title', '')}: {a.get('text', a.get('description',''))}" 
+        for a in articles
+    ])
+
+    # -----------------------------
+    # Synthèse LLM
+    # -----------------------------
+    system_prompt_text = "Tu es un assistant qui résume les actualités en français de manière concise."
+    try:
+        result = agent.run_sync(
+            f"Résume ces actualités en 5-6 phrases concises :\n{raw_news}",
+            system_prompt=system_prompt_text
+        )
+        # Récupération de la sortie texte
+        news_summary = getattr(result, "data", getattr(result, "output", str(result)))
+    except Exception as e_agent:
+        raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
+
+    # -----------------------------
+    # Sauvegarde dans la DB
+    # -----------------------------
     system_prompt = db.exec(select(SystemPrompt)).first()
-    prompt_text = f"Tu es l'assistant NewsFoundry. Voici les dernières actualités:\n{news_summary}"
+    prompt_text = f"Tu es l'assistant NewsFoundry. Voici les dernières actualités :\n{news_summary}"
+    now = datetime.utcnow()
     if system_prompt:
-        system_prompt.content = prompt_text
-        system_prompt.updated_at = datetime.utcnow()
+        system_prompt.prompt_text = prompt_text
+        system_prompt.updated_at = now
         db.add(system_prompt)
     else:
-        system_prompt = SystemPrompt(prompt_text=prompt_text)
+        system_prompt = SystemPrompt(prompt_text=prompt_text, created_at=now, updated_at=now)
         db.add(system_prompt)
     db.commit()
     db.refresh(system_prompt)
 
     return {"top_news_summary": news_summary, "updated_at": system_prompt.updated_at.isoformat()}
+
+@app.get("/search-news")
+def search_news(query: str, db: Session = Depends(get_db)):
+    if not WORLD_NEWS_API_KEY:
+        raise HTTPException(status_code=500, detail="Clé API World News non configurée")
+    
+    try:
+        response = requests.get(
+            "https://api.worldnewsapi.com/search-news",
+            params={
+                "apiKey": WORLD_NEWS_API_KEY,
+                "q": query,
+                "lang": "en", 
+                "sortBy": "relevance",
+                "pageSize": 10
+            }
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
+    
+    # Extraire titre + résumé pour faciliter lecture par le LLM
+    articles = data.get("articles", [])[:10]
+    news_summary = [
+        {"title": a.get("title", ""), "description": a.get("description", ""), "url": a.get("url", "")}
+        for a in articles
+    ]
+    
+    return {"query": query, "articles": news_summary}
 
 # -------------------
 # Lancement du serveur
