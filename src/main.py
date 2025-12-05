@@ -135,13 +135,12 @@ def search_news_tool(query: str) -> str:
     
     return "\n".join([f"- {a.get('title','')} : {a.get('description','')}" for a in articles])
 
-search_tool = Tool(
+search_tool = Tool.from_function(
+    search_news_tool,
     name="search_news",
-    description="Permet de rechercher des articles sur un sujet spécifique.",
-    func=search_news_tool,
+    description="Permet de rechercher des articles sur un sujet spécifique."
 )
 
-# Ajouter le tool à l'agent
 agent.add_tools([search_tool])
 
 # -------------------
