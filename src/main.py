@@ -9,7 +9,6 @@ import bcrypt
 import uvicorn
 import os
 from datetime import datetime
-import traceback
 
 # Charger dotenv uniquement si le fichier existe (local dev)
 if os.path.exists(".env"):
@@ -24,8 +23,8 @@ app = FastAPI()
 # CORS
 # -------------------
 origins = [
-    "http://localhost:3000",  
-    "https://p14-news-foundry-frontend.vercel.app",  
+    "http://localhost:3000",
+    "https://p14-news-foundry-frontend.vercel.app",
 ]
 
 app.add_middleware(
@@ -75,13 +74,12 @@ def get_current_user(
     return user
 
 # -------------------
-# Charger les clés IA AVANT toute utilisation
+# PydanticAI Agent Configuration
 # -------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 MODEL_NAME = os.getenv("PYDANTIC_AI_MODEL", "").strip()
 
-# Vérification et fallback
 if not MODEL_NAME:
     if OPENAI_API_KEY:
         MODEL_NAME = "openai:gpt-4o-mini"
@@ -92,7 +90,6 @@ if not MODEL_NAME:
             "❌ Aucune clé API configurée! Ajoutez OPENAI_API_KEY ou HF_TOKEN dans l'environnement Railway"
         )
 
-# Initialisation de l'agent
 try:
     agent = Agent(
         model=MODEL_NAME,
@@ -102,11 +99,9 @@ except Exception as e:
     print(f"❌ ERREUR d'initialisation de l'agent: {e}")
     raise
 
-
 # -------------------
-# Routes
+# Routes simples
 # -------------------
-
 @app.get("/")
 def hello():
     return {"message": "👋 API NewsFoundry fonctionne !", "model": MODEL_NAME}
@@ -115,82 +110,53 @@ def hello():
 def health():
     return {"status": "ok", "model": MODEL_NAME}
 
+# -------------------
+# Login
+# -------------------
 @app.post("/login")
 def login(payload: dict, db: Session = Depends(get_db)):
     email = payload.get("email")
     password = payload.get("password")
-    
-# -------------------
-# PydanticAI Agent Configuration
-# -------------------
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
-MODEL_NAME = os.getenv("PYDANTIC_AI_MODEL", "").strip()
-
-# Vérification et fallback
-if not MODEL_NAME:
-    if OPENAI_API_KEY:
-        MODEL_NAME = "openai:gpt-4o-mini"
-    elif HF_TOKEN:
-        MODEL_NAME = "huggingface:HuggingFaceH4/zephyr-7b-beta"
-    else:
-        raise RuntimeError(
-            "❌ Aucune clé API configurée! Ajoutez OPENAI_API_KEY ou HF_TOKEN dans l'environnement Railway"
-        )
-
-# Initialisation de l'agent
-try:
-    agent = Agent(
-        model=MODEL_NAME,
-        system_prompt="Tu es l'assistant NewsFoundry. Réponds de manière concise et informative en français."
-    )
-except Exception as e:
-    print(f"❌ ERREUR d'initialisation de l'agent: {e}")
-    raise
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email et mot de passe requis")
+
+    user = db.exec(select(User).where(User.email == email)).first()
+    if not user or not bcrypt.checkpw(password.encode(), user.hashed_password.encode()):
+        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
+
+    token = jwt.encode({"sub": user.email}, SECRET_KEY, algorithm=ALGORITHM)
+    return {"token": token, "user": {"id": user.id, "email": user.email}}
+
 # -------------------
 # Créer un chat
 # -------------------
 @app.post("/chats")
 def create_chat(payload: dict = {}, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    user_message = payload.get("message", "")
+    if not user_message:
+        raise HTTPException(status_code=400, detail="Message requis")
+
+    chat = Chat(
+        user_id=current_user.id,
+        title="Nouvelle conversation",
+        messages=[{"role": "user", "content": user_message}],
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+
     try:
-        user_message = payload.get("message", "")
-        if not user_message:
-            raise HTTPException(status_code=400, detail="Message requis")
+        result = agent.run_sync(user_message)
+        assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
+    except Exception as e_agent:
+        raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
 
-        chat = Chat(
-            user_id=current_user.id,
-            title="Nouvelle conversation",
-            messages=[{"role": "user", "content": user_message}],
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
+    chat.messages.append({"role": "assistant", "content": assistant_response})
 
-        try:
-            result = agent.run_sync(user_message)
-            if hasattr(result, 'data'):
-                assistant_response = result.data
-            elif hasattr(result, 'output'):
-                assistant_response = result.output
-            else:
-                assistant_response = str(result)
-        except Exception as e_agent:
-            raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
+    db.add(chat)
+    db.commit()
+    db.refresh(chat)
 
-        chat.messages.append({"role": "assistant", "content": assistant_response})
-
-        db.add(chat)
-        db.commit()
-        db.refresh(chat)
-
-        return {"chat_id": chat.id, "assistant_response": assistant_response, "messages": chat.messages}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"chat_id": chat.id, "assistant_response": assistant_response, "messages": chat.messages}
 
 # -------------------
 # Lister tous les chats
@@ -231,45 +197,42 @@ def get_chat(chat_id: int, current_user: User = Depends(get_current_user), db: S
 # Ajouter un message
 # -------------------
 @app.post("/chats/{chat_id}/messages")
-def add_message(chat_id: int, payload: dict, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def add_message(
+    chat_id: int, 
+    payload: dict, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    message_content = payload.get("message", "")
+    if not message_content:
+        raise HTTPException(status_code=400, detail="Message requis")
+
+    chat = db.exec(
+        select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
+    ).first()
+    if not chat:
+        raise HTTPException(status_code=404, detail="Discussion introuvable")
+
+    # Ajout du message utilisateur
+    chat.messages.append({"role": "user", "content": message_content})
+
+    # Appel à l'IA
     try:
-        message_content = payload.get("message", "")
-        if not message_content:
-            raise HTTPException(status_code=400, detail="Message requis")
+        result = agent.run_sync(message_content)
+        assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
+    except Exception as e_agent:
+        raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
 
-        chat = db.exec(select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))).first()
-        if not chat:
-            raise HTTPException(status_code=404, detail="Discussion introuvable")
+    # Ajout de la réponse de l'assistant
+    chat.messages.append({"role": "assistant", "content": assistant_response})
+    chat.updated_at = datetime.utcnow()
 
-        if chat.messages is None:
-            chat.messages = []
+    db.add(chat)
+    db.commit()
+    db.refresh(chat)
 
-        chat.messages.append({"role": "user", "content": message_content})
+    return {"assistant_response": assistant_response, "messages": chat.messages}
 
-        try:
-            result = agent.run_sync(message_content)
-            if hasattr(result, 'data'):
-                assistant_response = result.data
-            elif hasattr(result, 'output'):
-                assistant_response = result.output
-            else:
-                assistant_response = str(result)
-        except Exception as e_agent:
-            raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
-
-        chat.messages.append({"role": "assistant", "content": assistant_response})
-        chat.updated_at = datetime.utcnow()
-        db.add(chat)
-        db.commit()
-        db.refresh(chat)
-
-        return {"assistant_response": assistant_response, "messages": chat.messages}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------
 # Lancement du serveur

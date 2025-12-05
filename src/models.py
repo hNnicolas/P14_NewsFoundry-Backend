@@ -1,6 +1,7 @@
 from typing import Optional, List
 from sqlmodel import SQLModel, Field, Relationship, Column
 from sqlalchemy import JSON
+from sqlalchemy.ext.mutable import MutableList
 from datetime import datetime
 
 # --------------------------
@@ -24,9 +25,10 @@ class Chat(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    # Historique des messages stocké en JSON
-    # Exemple : [{"role": "user", "content": "Bonjour"}, {"role": "assistant", "content": "Salut !"}]
-    messages: List[dict] = Field( sa_column=Column(JSON, default=[]) )
-    
+    # Historique des messages suivi par SQLAlchemy
+    messages: List[dict] = Field(
+        sa_column=Column(MutableList.as_mutable(JSON), default_factory=list)
+    )
+
     # Relation avec l'utilisateur
     user: Optional[User] = Relationship(back_populates="chats")
