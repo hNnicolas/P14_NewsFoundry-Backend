@@ -11,6 +11,7 @@ import jwt
 import bcrypt
 import uvicorn
 import os
+import json
 from datetime import datetime
 from pydantic import BaseModel, Field  
 from pydantic_ai import Agent, RunContext, output
@@ -303,7 +304,7 @@ def create_chat(
         )
         print("❌ ERREUR IA :", str(e))
 
-    # On ajoute A CHAQUE FOIS une réponse assistant
+    # On ajoute une réponse assistant
     chat.messages.append({"role": "assistant", "content": assistant_response})
     chat.updated_at = datetime.utcnow()
 
@@ -312,7 +313,7 @@ def create_chat(
     db.commit()
     db.refresh(chat)
 
-    # Renvoi du chat_id obligatoire 
+    # Renvoi du chat_id
     return {
         "chat_id": chat.id,
         "assistant_response": assistant_response,
@@ -360,70 +361,62 @@ def get_chat(chat_id: int, current_user: User = Depends(get_current_user), db: S
 # Ajouter un message
 # -------------------
 @app.post("/chats/{chat_id}/messages")
-def add_message(
-    chat_id: int,
-    payload: dict,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+def add_message(chat_id: int, payload: dict, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     message_content = payload.get("message", "")
     if not message_content.strip():
         raise HTTPException(status_code=400, detail="Message requis")
 
-    # Récupérer le chat
+    # ---- Récupérer le chat ----
     chat = db.exec(
         select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
     ).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
 
-    # Ajouter le message utilisateur
-    chat.messages.append({"role": "user", "content": message_content})
+    # ---- Charger JSON depuis la DB ----
+    try:
+        messages = json.loads(chat.messages) if chat.messages else []
+    except Exception:
+        messages = []
 
-    # Récupérer le prompt système
+    # ---- Ajouter le message utilisateur ----
+    messages.append({"role": "user", "content": message_content})
+
+    # ---- Prompt système ----
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
 
-    # Fusion prompt système + message utilisateur
     combined_prompt = f"{system_prompt_text}\n\n{message_content}"
 
-    # Détection affirmative pour revue de presse
+    # ---- Revue de presse détectée ----
     if is_affirmative(message_content):
         idx = extract_article_index(message_content, 3)
-        # On retourne directement la revue de presse détaillée si affirmative
         return generate_detailed_press_review(chat, db, article_index=idx)
 
-    # Réponse normale
+    # ---- Appel modèle LLM ----
     try:
         result = agent.run_sync(user_prompt=combined_prompt)
         assistant_content = getattr(result, "data", getattr(result, "output", str(result)))
-
-        # Sécurisation : convertir en string pour éviter JSON non serializable
         if not isinstance(assistant_content, str):
             assistant_content = str(assistant_content)
-
     except Exception as e_agent:
         raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
 
-    chat.messages.append({"role": "assistant", "content": assistant_content})
+    # ---- Ajouter réponse assistant ----
+    messages.append({"role": "assistant", "content": assistant_content})
+
+    # ---- Sauvegarde JSON ----
+    chat.messages = json.dumps(messages)
     chat.updated_at = datetime.utcnow()
 
-    # Vérification JSON avant commit
-    import json
-    try:
-        json.dumps(chat.messages)
-    except Exception as e_json:
-        raise HTTPException(status_code=500, detail=f"Erreur JSON: {str(e_json)}")
-
-    # Sauvegarde en base
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
     return {
         "assistant_response": assistant_content,
-        "messages": chat.messages,
-        "system_prompt_used": system_prompt_text  
+        "messages": messages,
+        "system_prompt_used": system_prompt_text
     }
 
 # -------------------
