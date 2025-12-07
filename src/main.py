@@ -461,7 +461,6 @@ def get_top_news(db: Session = Depends(get_db)):
         response.raise_for_status()
         data = response.json()
 
-        # Extraction des articles
         articles = []
         for block in data.get("top_news", []):
             for a in block.get("news", []):
@@ -469,7 +468,7 @@ def get_top_news(db: Session = Depends(get_db)):
                     "title": a.get("title", ""),
                     "description": a.get("text", "")
                 })
-        articles = articles[:10]  
+        articles = articles[:10]
         if not articles:
             raise HTTPException(status_code=404, detail="Aucun article trouvé")
         print(f"[INFO] Nombre d'articles reçus: {len(articles)}")
@@ -486,13 +485,11 @@ def get_top_news(db: Session = Depends(get_db)):
         print(f"[ERROR] Exception inattendue: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur inattendue: {str(e)}")
 
-    # Préparer le résumé pour l'IA
     text_to_summarize = "\n".join([f"- {a['title']} : {a['description']}" for a in articles])
     
     try:
         result = agent.run_sync(
-            f"Résume ces articles politiques :\n{text_to_summarize}",
-            system_prompt="Résume chaque article en une phrase courte en français."
+            user_prompt=f"Résume ces articles politiques :\n{text_to_summarize}"
         )
         summarized_articles = getattr(result, "data", getattr(result, "output", str(result)))
     except Exception as e_agent:
@@ -521,6 +518,7 @@ def get_top_news(db: Session = Depends(get_db)):
         "system_prompt_preview": final_prompt,
         "updated_at": now.isoformat()
     }
+
 
 @app.get("/search-news")
 def search_news(query: str, db: Session = Depends(get_db)):
