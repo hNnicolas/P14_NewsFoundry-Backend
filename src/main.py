@@ -257,9 +257,6 @@ def login(payload: dict, db: Session = Depends(get_db)):
 # -------------------
 # Créer un chat
 # -------------------
-# -------------------
-# Créer un nouveau chat
-# -------------------
 @app.post("/chats")
 def create_chat(
     payload: dict = {},
@@ -271,7 +268,7 @@ def create_chat(
     if not user_message:
         raise HTTPException(status_code=400, detail="Message requis")
 
-    # Crée le chat vide
+    # Création du chat en base 
     chat = Chat(
         user_id=current_user.id,
         title=payload.get("title", "Nouvelle conversation"),
@@ -281,17 +278,16 @@ def create_chat(
     )
 
     db.add(chat)
-    db.commit()      
+    db.commit()
     db.refresh(chat)
 
-    # Récupère le prompt système
+    # Récupération du prompt système
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
 
-    # Fusionne prompt système + message utilisateur
     combined_prompt = f"{system_prompt_text}\n\n{user_message}"
 
-    # Génère réponse IA
+    # Tentative de génération IA 
     try:
         result = agent.run_sync(user_prompt=combined_prompt)
         assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
@@ -300,22 +296,23 @@ def create_chat(
             assistant_response = str(assistant_response)
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e)}")
+        assistant_response = (
+            "⚠️ Je n'ai pas pu récupérer les actualités pour le moment, "
+            "mais la conversation a bien été créée. "
+            "Tu peux continuer à discuter normalement."
+        )
+        print("❌ ERREUR IA :", str(e))
 
-    # Ajoute la réponse dans l'historique
+    # On ajoute A CHAQUE FOIS une réponse assistant
     chat.messages.append({"role": "assistant", "content": assistant_response})
     chat.updated_at = datetime.utcnow()
 
-    # Vérification JSON
-    import json
-    json.dumps(chat.messages)
-
-    # Sauvegarde finale
+    # Sauvegarde
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
-    # Retourne ID du nouveau thread
+    # Renvoi du chat_id obligatoire 
     return {
         "chat_id": chat.id,
         "assistant_response": assistant_response,
