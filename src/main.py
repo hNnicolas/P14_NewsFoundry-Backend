@@ -1,4 +1,6 @@
 # src/main.py
+import re
+import unicodedata
 import requests
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Header
@@ -74,6 +76,59 @@ def get_current_user(
     if not user:
         raise HTTPException(status_code=401, detail="Utilisateur introuvable")
     return user
+
+# -------------------
+# Helpers: normalisation & détection affirmative
+# -------------------
+YES_WORDS = {
+    "oui", "ouais", "si", "yes", "yep", "d'accord", "ok", "okey", "okay", "je veux", "oui s'il vous plaît", "oui stp", "oui svp", "bien sûr"
+}
+
+def normalize_text(s: str) -> str:
+    """Normalise accents, casse, espaces et supprime ponctuation superflue."""
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.lower().strip()
+    # replace multiple spaces
+    s = re.sub(r"\s+", " ", s)
+    # remove surrounding punctuation
+    s = s.strip(" .!?;:,")
+    return s
+
+def is_affirmative(s: str) -> bool:
+    n = normalize_text(s)
+    # phrase contains explicit yes words
+    for w in YES_WORDS:
+        if re.search(rf"\b{re.escape(w)}\b", n):
+            return True
+    # catch short forms: just "oui", "oui."
+    if n in YES_WORDS:
+        return True
+    return False
+
+def extract_article_index(s: str, max_index: int) -> Optional[int]:
+    """
+    Tente d'extraire un numéro d'article à partir du texte (ex. "le 2", "article 1", "n°3").
+    Retourne un index (0-based) si trouvé et valide, sinon None.
+    """
+    n = normalize_text(s)
+    # rechercher un nombre
+    m = re.search(r"\b(?:n°|numero|numéro|article|le|la|l'|n|#)\s*([1-9][0-9]?)\b", n)
+    if not m:
+        # aussi détecter simple "2"
+        m2 = re.search(r"\b([1-9][0-9]?)\b", n)
+        if m2:
+            val = int(m2.group(1))
+        else:
+            return None
+    else:
+        val = int(m.group(1))
+
+    if 1 <= val <= max_index:
+        return val - 1
+    return None
 
 # -------------------
 # PydanticAI Agent Configuration
@@ -269,14 +324,15 @@ def get_chat(chat_id: int, current_user: User = Depends(get_current_user), db: S
         "updated_at": chat.updated_at.isoformat() if chat.updated_at else None
     }
 
+
 # -------------------
 # Ajouter un message
 # -------------------
 @app.post("/chats/{chat_id}/messages")
 def add_message(
-    chat_id: int, 
-    payload: dict, 
-    current_user: User = Depends(get_current_user), 
+    chat_id: int,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     message_content = payload.get("message", "")
@@ -291,12 +347,31 @@ def add_message(
 
     chat.messages.append({"role": "user", "content": message_content})
 
-    # Inclure prompt système actualités
+    # Récupérer le prompt système actualisé
     system_prompt = db.exec(select(SystemPrompt)).first()
-    full_prompt = system_prompt.prompt_text if system_prompt else "Tu es l'assistant NewsFoundry."
+    system_prompt_text = (
+        system_prompt.prompt_text if system_prompt
+        else "Tu es l'assistant NewsFoundry."
+    )
 
+    # ---------------------------
+    # 1️⃣ Détection du mot-clé "oui" ou demande d'article précis
+    # ---------------------------
+    if is_affirmative(message_content):
+        # si l'utilisateur précise "le 2" ou "article 1", on tente d'extraire l'index
+        # récupérons les derniers articles stockés dans le prompt si possible :
+        # on considère que le prompt contient 3 <li> et on autorise 1..3
+        idx = extract_article_index(message_content, 3)
+        return generate_detailed_press_review(chat, db, article_index=idx)
+
+    # ---------------------------
+    # 2️⃣ Réponse normale du chat
+    # ---------------------------
     try:
-        result = agent.run_sync(message_content, system_prompt=full_prompt)
+        result = agent.run_sync(
+            message_content,
+            system_prompt=system_prompt_text
+        )
         assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
     except Exception as e_agent:
         raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
@@ -307,39 +382,133 @@ def add_message(
     db.commit()
     db.refresh(chat)
 
-    return {"assistant_response": assistant_response, "messages": chat.messages}
+    return {
+        "assistant_response": assistant_response,
+        "messages": chat.messages
+    }
+
+# -------------------
+# Génération revue de presse détaillée
+# -------------------
+def generate_detailed_press_review(chat: Chat, db: Session, article_index: Optional[int] = None):
+    """
+    Utilise le SystemPrompt sauvegardé pour produire une revue de presse détaillée.
+    Si article_index est fourni (0-based), on demande le détail pour cet article.
+    """
+    system_prompt = db.exec(select(SystemPrompt)).first()
+    if not system_prompt or not system_prompt.prompt_text:
+        raise HTTPException(status_code=400, detail="Aucune actualité disponible pour générer la revue de presse.")
+
+    # Si l'utilisateur demande un article précis, on construit une instruction qui cible cet article.
+    if article_index is not None:
+        instruction = (
+            f"Donne le détail complet de l'article n°{article_index + 1} parmi les sujets listés "
+            "dans ce prompt (titre, résumé détaillé, source si disponible, et 3 points clés)."
+        )
+    else:
+        instruction = (
+            "Génère une revue de presse détaillée : pour chaque sujet listé dans le prompt, fournis "
+            "un titre, un court chapeau, puis 3 éléments clés et un lien ou source si disponible."
+        )
+
+    try:
+        result = agent.run_sync(
+            instruction,
+            system_prompt=system_prompt.prompt_text
+        )
+        detailed_review = getattr(result, "data", getattr(result, "output", str(result)))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
+
+    # Sauvegarde dans le chat (on ajoute un message assistant)
+    chat.messages.append({"role": "assistant", "content": detailed_review})
+    chat.updated_at = datetime.utcnow()
+
+    db.add(chat)
+    db.commit()
+    db.refresh(chat)
+
+    return {
+        "assistant_response": detailed_review,
+        "messages": chat.messages
+    }
+
 
 # -------------------
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
 # -------------------
 
 @app.get("/top-news")
-def get_top_news(db: Session = Depends(get_db), lang: str = "en", country: str = "us"):
+def get_top_news(db: Session = Depends(get_db)):
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
-    
-    params = {
-        "api-key": WORLD_NEWS_API_KEY,
-        "category": "general",
-        "language": lang,
-        "source-country": country
-    }
 
     try:
-        response = requests.get(WORLD_NEWS_URL, params=params)
+        response = requests.get(
+            WORLD_NEWS_URL,
+            params={
+                "api-key": WORLD_NEWS_API_KEY,
+                "category": "politics",
+                "language": "fr",
+                "pageSize": 10
+            }
+        )
         response.raise_for_status()
         data = response.json()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
 
-    articles = data.get("articles", [])[:10] 
+    # On garde seulement les 3 premiers articles
+    articles = data.get("articles", [])[:3]
     if not articles:
         raise HTTPException(status_code=404, detail="Aucun article trouvé")
 
-    raw_news = "\n".join([
-        f"- {a.get('title', '')}: {a.get('text', a.get('description',''))}" 
+    # Construire le contenu brut pour résumé
+    text_to_summarize = "\n".join([
+        f"- {a.get('title','')}: {a.get('description','')}"
         for a in articles
     ])
+
+    # Synthèse IA
+    system_prompt_text = "Résume chaque article en une phrase courte en français."
+    try:
+        result = agent.run_sync(
+            f"Résume ces articles politiques :\n{text_to_summarize}",
+            system_prompt=system_prompt_text
+        )
+        summarized_articles = getattr(result, "data", getattr(result, "output", str(result)))
+    except Exception as e_agent:
+        raise HTTPException(status_code=500, detail=f"Erreur IA: {str(e_agent)}")
+
+    # Construction du prompt final
+    final_prompt = (
+        "Voici un résumé des dernières nouvelles politiques :\n\n"
+        f"{summarized_articles}\n\n"
+        "Souhaitez-vous que je génère une revue de presse détaillée sur l'un des sujets ?"
+    )
+
+    # Sauvegarde DB
+    system_prompt = db.exec(select(SystemPrompt)).first()
+    now = datetime.utcnow()
+
+    if system_prompt:
+        system_prompt.prompt_text = final_prompt
+        system_prompt.updated_at = now
+    else:
+        system_prompt = SystemPrompt(
+            prompt_text=final_prompt, 
+            updated_at=now
+        )
+    db.add(system_prompt)
+    db.commit()
+    db.refresh(system_prompt)
+
+    return {
+        "message": "Actualités politiques mises à jour",
+        "system_prompt_preview": final_prompt,
+        "updated_at": now.isoformat()
+    }
+
 
     # -----------------------------
     # Synthèse LLM
