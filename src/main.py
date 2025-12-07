@@ -257,16 +257,21 @@ def login(payload: dict, db: Session = Depends(get_db)):
 # -------------------
 # Créer un chat
 # -------------------
+# -------------------
+# Créer un nouveau chat
+# -------------------
 @app.post("/chats")
 def create_chat(
     payload: dict = {},
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    user_message = payload.get("message", "")
+    user_message = payload.get("message", "").strip()
+
     if not user_message:
         raise HTTPException(status_code=400, detail="Message requis")
 
+    # Crée le chat vide
     chat = Chat(
         user_id=current_user.id,
         title=payload.get("title", "Nouvelle conversation"),
@@ -275,25 +280,42 @@ def create_chat(
         updated_at=datetime.utcnow()
     )
 
-    # Récupérer le prompt système actuel
+    db.add(chat)
+    db.commit()      
+    db.refresh(chat)
+
+    # Récupère le prompt système
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
 
+    # Fusionne prompt système + message utilisateur
     combined_prompt = f"{system_prompt_text}\n\n{user_message}"
 
+    # Génère réponse IA
     try:
         result = agent.run_sync(user_prompt=combined_prompt)
         assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
-    except Exception as e_agent:
-        raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
 
+        if not isinstance(assistant_response, str):
+            assistant_response = str(assistant_response)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e)}")
+
+    # Ajoute la réponse dans l'historique
     chat.messages.append({"role": "assistant", "content": assistant_response})
     chat.updated_at = datetime.utcnow()
 
+    # Vérification JSON
+    import json
+    json.dumps(chat.messages)
+
+    # Sauvegarde finale
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
+    # Retourne ID du nouveau thread
     return {
         "chat_id": chat.id,
         "assistant_response": assistant_response,
@@ -404,7 +426,7 @@ def add_message(
     return {
         "assistant_response": assistant_content,
         "messages": chat.messages,
-        "system_prompt_used": system_prompt_text  # <-- Ajouté pour affichage/debug
+        "system_prompt_used": system_prompt_text  
     }
 
 # -------------------
