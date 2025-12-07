@@ -485,11 +485,7 @@ def generate_detailed_press_review(chat: Chat, db: Session, article_index: Optio
 # -------------------
 
 @app.get("/top-news")
-def get_top_news(db: Session = Depends(get_db)):
-    """
-    Récupère les dernières actualités depuis World News API,
-    ne garde que le titre et la description, et met à jour le SystemPrompt.
-    """
+def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
 
@@ -516,7 +512,7 @@ def get_top_news(db: Session = Depends(get_db)):
                     "title": a.get("title", ""),
                     "description": a.get("text", "")
                 })
-        articles = articles[:10]  # limiter à 10 articles
+        articles = articles[:10]
 
         if not articles:
             raise HTTPException(status_code=404, detail="Aucun article trouvé")
@@ -524,22 +520,18 @@ def get_top_news(db: Session = Depends(get_db)):
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
 
-    # -------------------
-    # Synthèse simple (Python, fail-safe)
-    # -------------------
+    # --- Générer un résumé simple pour le LLM et le message assistant ---
     summarized_articles = "\n".join(
         [f"- {a['title']}: {a['description'][:150]}{'...' if len(a['description']) > 150 else ''}" for a in articles]
     )
 
-    # Construire le nouveau SystemPrompt
+    # --- Mettre à jour le SystemPrompt pour le LLM ---
     final_prompt = (
         "Voici un résumé des dernières actualités françaises :\n\n"
         f"{summarized_articles}\n\n"
         "Lorsque l'utilisateur pose une question sur l'actualité, "
         "réponds uniquement à partir de ces informations à jour."
     )
-
-    # Sauvegarde dans la DB
     now = datetime.utcnow()
     system_prompt = db.exec(select(SystemPrompt)).first()
     if system_prompt:
@@ -551,11 +543,28 @@ def get_top_news(db: Session = Depends(get_db)):
     db.commit()
     db.refresh(system_prompt)
 
+    # --- Ajouter le message assistant dans le chat ---
+    chat = db.exec(
+        select(Chat).where(Chat.user_id == current_user.id).order_by(Chat.updated_at.desc())
+    ).first()
+
+    if chat:
+        chat.messages.append({
+            "role": "assistant",
+            "content": f"📰 Voici les dernières actualités françaises mises à jour :\n\n{summarized_articles}"
+        })
+        chat.updated_at = now
+        db.add(chat)
+        db.commit()
+        db.refresh(chat)
+
     return {
-        "message": "Actualités mises à jour avec succès",
+        "message": "Actualités mises à jour et ajoutées dans le chat",
         "system_prompt_preview": final_prompt,
+        "chat_id": chat.id if chat else None,
         "updated_at": now.isoformat()
     }
+
 
 @app.get("/search-news")
 def search_news_full(
