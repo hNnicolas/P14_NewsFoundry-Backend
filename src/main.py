@@ -367,57 +367,57 @@ def add_message(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # ---- Récupérer le message utilisateur ----
+    # ---- Récupère le message utilisateur ----
     message_content = payload.get("message", "").strip()
     if not message_content:
         raise HTTPException(status_code=400, detail="Message requis")
 
-    # ---- Récupérer le chat depuis la DB ----
+    # ---- Récupère le chat depuis la DB ----
     chat = db.exec(
         select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
     ).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
 
-    # ---- Ajouter le message utilisateur à l'historique ----
+    # ---- Ajoute le message utilisateur à l'historique ----
     messages = chat.messages or []
     messages.append({"role": "user", "content": message_content})
     chat.messages = messages
 
-    # ---- Vérification Revue de Presse (optionnelle) ----
+    # ---- Vérification optionnelle : revue de presse ----
     if is_affirmative(message_content):
         idx = extract_article_index(message_content, 3)
         return generate_detailed_press_review(chat, db, article_index=idx)
 
-    # ---- Charger le prompt système ----
+    # ---- Charge le prompt système ----
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
-    system_prompt_text = (
-        system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
-    )
+    system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
 
-    # ---- Construire le prompt texte pour le modèle ----
-    conversation_text = system_prompt_text + "\n\n"
-    for msg in messages:
-        role = msg["role"].capitalize()
-        conversation_text += f"{role}: {msg['content']}\n"
+    # ---- Construit l'historique complet pour le modèle ----
+    conversation = [{"role": "system", "content": system_prompt_text}]
+    conversation.extend(messages)  # messages = [{"role": "user"/"assistant", "content": "..."}]
 
     # ---- Appel LLM via PydanticAI agent ----
     try:
-        result = agent.run_sync(user_prompt=conversation_text)
+        result = agent.run_sync(user_prompt=conversation)
+
+        # Extraire le contenu assistant
         assistant_content = getattr(result, "data", getattr(result, "output", str(result)))
         if not isinstance(assistant_content, str):
             assistant_content = str(assistant_content)
-        # Supprime caractères interdits
+
+        # Nettoyer caractères indésirables
         assistant_content = assistant_content.replace("\x00", "")
+
     except Exception as e_agent:
         raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
 
-    # ---- Ajouter la réponse assistant à l'historique ----
+    # ---- Ajoute la réponse assistant à l'historique ----
     messages.append({"role": "assistant", "content": assistant_content})
     chat.messages = messages
     chat.updated_at = datetime.utcnow()
 
-    # ---- Sauvegarder dans la DB ----
+    # ---- Sauvegarde dans la DB ----
     db.add(chat)
     db.commit()
     db.refresh(chat)
@@ -428,7 +428,6 @@ def add_message(
         "messages": messages,
         "system_prompt_used": system_prompt_text
     }
-
 
 # -------------------
 # Génération revue de presse détaillée
