@@ -279,12 +279,11 @@ def create_chat(
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
 
-    # Appel de l'agent corrigé
+    # La syntaxe correcte pour run_sync : user_prompt contient le message + système
+    combined_prompt = f"{system_prompt_text}\n\n{user_message}"
+
     try:
-        result = agent.run_sync(
-            user_prompt=user_message,
-            system_prompt=system_prompt_text
-        )
+        result = agent.run_sync(user_prompt=combined_prompt)
         assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
     except Exception as e_agent:
         raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
