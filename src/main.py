@@ -265,7 +265,7 @@ def create_chat(payload: dict = {}, current_user: User = Depends(get_current_use
 
     chat = Chat(
         user_id=current_user.id,
-        title="Nouvelle conversation",
+        title=payload.get("title", "Nouvelle conversation"), 
         messages=[{"role": "user", "content": user_message}],
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
