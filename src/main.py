@@ -371,55 +371,50 @@ def add_message(
     if not message_content.strip():
         raise HTTPException(status_code=400, detail="Message requis")
 
-    # ---- Récupérer le chat ----
+    # ---- Récupère le chat ----
     chat = db.exec(
         select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
     ).first()
+
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
 
-    # ---- Ajouter le message utilisateur ----
+    # ---- Ajoute le message utilisateur ----
     chat.messages.append({"role": "user", "content": message_content})
 
     # ---- Charger le prompt système ----
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
-    system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else (
-        "Tu es l'assistant NewsFoundry."
-    )
-
-    combined_prompt = f"{system_prompt_text}\n\n{message_content}"
+    system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
 
     # ---- Vérification Revue de Presse ----
     if is_affirmative(message_content):
         idx = extract_article_index(message_content, 3)
         return generate_detailed_press_review(chat, db, article_index=idx)
 
-    # ---- Appel au LLM ----
+    # ---- Appel au LLM direct (sans agent, sans API externes) ----
     try:
-        result = agent.run_sync(user_prompt=combined_prompt)
-
-        assistant_content = getattr(
-            result, "data",
-            getattr(result, "output", str(result))
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt_text},
+                {"role": "user", "content": message_content}
+            ]
         )
 
-        # Conversion sécurisée → Toujours une string
-        if not isinstance(assistant_content, str):
-            assistant_content = str(assistant_content)
+        assistant_content = response.output_text
 
-        # Supprimer caractères interdits JSON/PostgreSQL
+        # Nettoyage
         assistant_content = assistant_content.replace("\x00", "")
 
-    except Exception as e_agent:
+    except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Erreur du modèle IA: {str(e_agent)}"
+            detail=f"Erreur du modèle IA: {str(e)}"
         )
 
-    # ---- Ajouter réponse LLM ----
+    # ---- Ajoute la réponse du modèle ----
     chat.messages.append({"role": "assistant", "content": assistant_content})
 
-    # ---- Commit ----
     chat.updated_at = datetime.utcnow()
     db.add(chat)
     db.commit()
