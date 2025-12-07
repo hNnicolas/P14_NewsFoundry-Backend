@@ -446,20 +446,25 @@ def get_top_news(db: Session = Depends(get_db)):
         print("[ERROR] Clé API World News non configurée")
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
 
+    params = {
+        "api-key": WORLD_NEWS_API_KEY,
+        "category": "politics",
+        "language": "fr",
+        "pageSize": 10
+    }
+    print(f"[DEBUG] Params envoyés à l'API: {params}")
+
     try:
         print("[INFO] Appel à l'API World News...")
-        response = requests.get(
-            WORLD_NEWS_URL,
-            params={
-                "api-key": WORLD_NEWS_API_KEY,
-                "category": "politics",
-                "language": "fr",
-                "pageSize": 10
-            }
-        )
+        response = requests.get(WORLD_NEWS_URL, params=params)
+        print(f"[DEBUG] URL finale appelée: {response.url}")
         response.raise_for_status()
         data = response.json()
         print(f"[INFO] Articles reçus: {len(data.get('articles', []))}")
+    except requests.exceptions.HTTPError as e:
+        print(f"[ERROR] Erreur HTTP API World News: {e}")
+        print(f"[DEBUG] Contenu de la réponse: {e.response.text if e.response else 'No response'}")
+        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
     except Exception as e:
         print(f"[ERROR] Erreur API World News: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
@@ -514,6 +519,7 @@ def get_top_news(db: Session = Depends(get_db)):
         "system_prompt_preview": final_prompt,
         "updated_at": now.isoformat()
     }
+
 
 
 @app.get("/search-news")
