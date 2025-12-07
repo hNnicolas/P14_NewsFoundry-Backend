@@ -442,32 +442,41 @@ def get_top_news(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
 
     params = {
-        "source-country": "fr",        
+        "source-country": "fr",
         "language": "fr",
-        "date": "2025-12-07"  # optionnel, tu peux utiliser la date du jour si nécessaire
+        "date": "2025-12-07"
     }
     print(f"[DEBUG] Params envoyés à l'API: {params}")
 
     try:
         response = requests.get(
             WORLD_NEWS_URL,
-            headers={"x-api-key": WORLD_NEWS_API_KEY},  # ✅ header obligatoire
-            params=params
+            headers={"x-api-key": WORLD_NEWS_API_KEY},
+            params=params,
+            timeout=10
         )
         print(f"[DEBUG] URL finale appelée: {response.url}")
+        print(f"[DEBUG] Status code: {response.status_code}")
+        print(f"[DEBUG] Response content: {response.text[:500]}")  # limite à 500 chars
         response.raise_for_status()
         data = response.json()
-        articles = data.get("articles", [])[:10]  
+        articles = data.get("articles", [])[:10]
         if not articles:
             raise HTTPException(status_code=404, detail="Aucun article trouvé")
         print(f"[INFO] Nombre d'articles reçus: {len(articles)}")
     except requests.exceptions.HTTPError as e:
-        print(f"[ERROR] Erreur HTTP: {e}")
-        print(f"[DEBUG] Contenu de la réponse: {e.response.text if e.response else 'No response'}")
+        print(f"[ERROR] HTTPError: {e}")
+        if e.response is not None:
+            print(f"[ERROR] Response: {e.response.text}")
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
+    except requests.exceptions.RequestException as e:
+        print(f"[ERROR] RequestException: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur de requête API World News: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
+        print(f"[ERROR] Exception inattendue: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur inattendue: {str(e)}")
 
+    # préparation du résumé
     text_to_summarize = "\n".join([f"- {a.get('title','')} : {a.get('description','')}" for a in articles])
     
     try:
@@ -477,6 +486,7 @@ def get_top_news(db: Session = Depends(get_db)):
         )
         summarized_articles = getattr(result, "data", getattr(result, "output", str(result)))
     except Exception as e_agent:
+        print(f"[ERROR] Erreur IA: {e_agent}")
         raise HTTPException(status_code=500, detail=f"Erreur IA: {str(e_agent)}")
 
     final_prompt = (
@@ -501,6 +511,7 @@ def get_top_news(db: Session = Depends(get_db)):
         "system_prompt_preview": final_prompt,
         "updated_at": now.isoformat()
     }
+
 
 
 @app.get("/search-news")
