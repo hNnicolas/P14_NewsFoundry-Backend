@@ -442,14 +442,18 @@ def get_top_news(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
 
     params = {
-        "apiKey": WORLD_NEWS_API_KEY,   
         "source-country": "fr",        
-        "language": "fr"               
+        "language": "fr",
+        "date": "2025-12-07"  # optionnel, tu peux utiliser la date du jour si nécessaire
     }
     print(f"[DEBUG] Params envoyés à l'API: {params}")
 
     try:
-        response = requests.get(WORLD_NEWS_URL, params=params)
+        response = requests.get(
+            WORLD_NEWS_URL,
+            headers={"x-api-key": WORLD_NEWS_API_KEY},  # ✅ header obligatoire
+            params=params
+        )
         print(f"[DEBUG] URL finale appelée: {response.url}")
         response.raise_for_status()
         data = response.json()
@@ -497,6 +501,7 @@ def get_top_news(db: Session = Depends(get_db)):
         "system_prompt_preview": final_prompt,
         "updated_at": now.isoformat()
     }
+
 
 @app.get("/search-news")
 def search_news(query: str, db: Session = Depends(get_db)):
