@@ -1,4 +1,3 @@
-# src/main.py
 import re
 import unicodedata
 import requests
@@ -355,17 +354,14 @@ def add_message(
     )
 
     # ---------------------------
-    # 1️⃣ Détection du mot-clé "oui" ou demande d'article précis
+    # Détection du mot-clé 
     # ---------------------------
     if is_affirmative(message_content):
-        # si l'utilisateur précise "le 2" ou "article 1", on tente d'extraire l'index
-        # récupérons les derniers articles stockés dans le prompt si possible :
-        # on considère que le prompt contient 3 <li> et on autorise 1..3
         idx = extract_article_index(message_content, 3)
         return generate_detailed_press_review(chat, db, article_index=idx)
 
     # ---------------------------
-    # 2️⃣ Réponse normale du chat
+    # Réponse normale du chat
     # ---------------------------
     try:
         result = agent.run_sync(
@@ -443,51 +439,40 @@ def get_top_news(db: Session = Depends(get_db)):
     print("[INFO] Début de la récupération des actualités")
     
     if not WORLD_NEWS_API_KEY:
-        print("[ERROR] Clé API World News non configurée")
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
 
     params = {
-        "api-key": WORLD_NEWS_API_KEY,
-        "category": "politics",
-        "language": "fr",
-        "pageSize": 10
+        "apiKey": WORLD_NEWS_API_KEY,   
+        "source-country": "fr",        
+        "language": "fr"               
     }
     print(f"[DEBUG] Params envoyés à l'API: {params}")
 
     try:
-        print("[INFO] Appel à l'API World News...")
         response = requests.get(WORLD_NEWS_URL, params=params)
         print(f"[DEBUG] URL finale appelée: {response.url}")
         response.raise_for_status()
         data = response.json()
-        print(f"[INFO] Articles reçus: {len(data.get('articles', []))}")
+        articles = data.get("articles", [])[:10]  
+        if not articles:
+            raise HTTPException(status_code=404, detail="Aucun article trouvé")
+        print(f"[INFO] Nombre d'articles reçus: {len(articles)}")
     except requests.exceptions.HTTPError as e:
-        print(f"[ERROR] Erreur HTTP API World News: {e}")
+        print(f"[ERROR] Erreur HTTP: {e}")
         print(f"[DEBUG] Contenu de la réponse: {e.response.text if e.response else 'No response'}")
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
     except Exception as e:
-        print(f"[ERROR] Erreur API World News: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
 
-    articles = data.get("articles", [])[:3]
-    if not articles:
-        print("[WARN] Aucun article trouvé")
-        raise HTTPException(status_code=404, detail="Aucun article trouvé")
-
-    text_to_summarize = "\n".join([f"- {a.get('title','')}: {a.get('description','')}" for a in articles])
-    print(f"[INFO] Texte à résumer: {text_to_summarize}")
-
-    system_prompt_text = "Résume chaque article en une phrase courte en français."
+    text_to_summarize = "\n".join([f"- {a.get('title','')} : {a.get('description','')}" for a in articles])
+    
     try:
-        print("[INFO] Appel à l'agent IA...")
         result = agent.run_sync(
             f"Résume ces articles politiques :\n{text_to_summarize}",
-            system_prompt=system_prompt_text
+            system_prompt="Résume chaque article en une phrase courte en français."
         )
         summarized_articles = getattr(result, "data", getattr(result, "output", str(result)))
-        print(f"[INFO] Résumé IA: {summarized_articles}")
     except Exception as e_agent:
-        print(f"[ERROR] Erreur IA: {e_agent}")
         raise HTTPException(status_code=500, detail=f"Erreur IA: {str(e_agent)}")
 
     final_prompt = (
@@ -496,31 +481,22 @@ def get_top_news(db: Session = Depends(get_db)):
         "Souhaitez-vous que je génère une revue de presse détaillée sur l'un des sujets ?"
     )
 
-    try:
-        system_prompt = db.exec(select(SystemPrompt)).first()
-        now = datetime.utcnow()
-        if system_prompt:
-            print("[INFO] Mise à jour du prompt existant")
-            system_prompt.prompt_text = final_prompt
-            system_prompt.updated_at = now
-        else:
-            print("[INFO] Création d'un nouveau prompt")
-            system_prompt = SystemPrompt(prompt_text=final_prompt, updated_at=now)
-            db.add(system_prompt)
-        db.commit()
-        db.refresh(system_prompt)
-        print("[INFO] Prompt sauvegardé en DB")
-    except Exception as e_db:
-        print(f"[ERROR] Erreur DB: {e_db}")
-        raise HTTPException(status_code=500, detail=f"Erreur DB: {str(e_db)}")
+    now = datetime.utcnow()
+    system_prompt = db.exec(select(SystemPrompt)).first()
+    if system_prompt:
+        system_prompt.prompt_text = final_prompt
+        system_prompt.updated_at = now
+    else:
+        system_prompt = SystemPrompt(prompt_text=final_prompt, updated_at=now)
+        db.add(system_prompt)
+    db.commit()
+    db.refresh(system_prompt)
 
     return {
         "message": "Actualités politiques mises à jour",
         "system_prompt_preview": final_prompt,
         "updated_at": now.isoformat()
     }
-
-
 
 @app.get("/search-news")
 def search_news(query: str, db: Session = Depends(get_db)):
