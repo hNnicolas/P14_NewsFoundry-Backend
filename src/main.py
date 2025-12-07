@@ -457,13 +457,23 @@ def get_top_news(db: Session = Depends(get_db)):
         )
         print(f"[DEBUG] URL finale appelée: {response.url}")
         print(f"[DEBUG] Status code: {response.status_code}")
-        print(f"[DEBUG] Response content: {response.text[:500]}")  # limite à 500 chars
+        print(f"[DEBUG] Response content: {response.text[:500]}")
         response.raise_for_status()
         data = response.json()
-        articles = data.get("articles", [])[:10]
+
+        # Extraction des articles
+        articles = []
+        for block in data.get("top_news", []):
+            for a in block.get("news", []):
+                articles.append({
+                    "title": a.get("title", ""),
+                    "description": a.get("text", "")
+                })
+        articles = articles[:10]  
         if not articles:
             raise HTTPException(status_code=404, detail="Aucun article trouvé")
         print(f"[INFO] Nombre d'articles reçus: {len(articles)}")
+        
     except requests.exceptions.HTTPError as e:
         print(f"[ERROR] HTTPError: {e}")
         if e.response is not None:
@@ -476,8 +486,8 @@ def get_top_news(db: Session = Depends(get_db)):
         print(f"[ERROR] Exception inattendue: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur inattendue: {str(e)}")
 
-    # préparation du résumé
-    text_to_summarize = "\n".join([f"- {a.get('title','')} : {a.get('description','')}" for a in articles])
+    # Préparer le résumé pour l'IA
+    text_to_summarize = "\n".join([f"- {a['title']} : {a['description']}" for a in articles])
     
     try:
         result = agent.run_sync(
@@ -511,8 +521,6 @@ def get_top_news(db: Session = Depends(get_db)):
         "system_prompt_preview": final_prompt,
         "updated_at": now.isoformat()
     }
-
-
 
 @app.get("/search-news")
 def search_news(query: str, db: Session = Depends(get_db)):
