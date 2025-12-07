@@ -486,17 +486,18 @@ def generate_detailed_press_review(chat: Chat, db: Session, article_index: Optio
 
 @app.get("/top-news")
 def get_top_news(db: Session = Depends(get_db)):
-    print("[INFO] Début de la récupération des actualités")
-    
+    """
+    Récupère les dernières actualités depuis World News API,
+    ne garde que le titre et la description, et met à jour le SystemPrompt.
+    """
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
 
     params = {
         "source-country": "fr",
         "language": "fr",
-        "date": "2025-12-07"
+        "date": datetime.utcnow().strftime("%Y-%m-%d")
     }
-    print(f"[DEBUG] Params envoyés à l'API: {params}")
 
     try:
         response = requests.get(
@@ -515,38 +516,30 @@ def get_top_news(db: Session = Depends(get_db)):
                     "title": a.get("title", ""),
                     "description": a.get("text", "")
                 })
-        articles = articles[:10]
+        articles = articles[:10]  # limiter à 10 articles
+
         if not articles:
             raise HTTPException(status_code=404, detail="Aucun article trouvé")
-        
-    except requests.exceptions.HTTPError as e:
-        if e.response is not None:
-            print(f"[ERROR] Response: {e.response.text}")
-        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
+
     except requests.exceptions.RequestException as e:
-        print(f"[ERROR] RequestException: {e}")
-        raise HTTPException(status_code=500, detail=f"Erreur de requête API World News: {str(e)}")
-    except Exception as e:
-        print(f"[ERROR] Exception inattendue: {e}")
-        raise HTTPException(status_code=500, detail=f"Erreur inattendue: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
 
-    text_to_summarize = "\n".join([f"- {a['title']} : {a['description']}" for a in articles])
-    
-    try:
-        result = agent.run_sync(
-            user_prompt=f"Résume ces articles politiques :\n{text_to_summarize}"
-        )
-        summarized_articles = getattr(result, "data", getattr(result, "output", str(result)))
-    except Exception as e_agent:
-        print(f"[ERROR] Erreur IA: {e_agent}")
-        raise HTTPException(status_code=500, detail=f"Erreur IA: {str(e_agent)}")
-
-    final_prompt = (
-        "Voici un résumé des dernières nouvelles politiques :\n\n"
-        f"{summarized_articles}\n\n"
-        "Souhaitez-vous que je génère une revue de presse détaillée sur l'un des sujets ?"
+    # -------------------
+    # Synthèse simple (Python, fail-safe)
+    # -------------------
+    summarized_articles = "\n".join(
+        [f"- {a['title']}: {a['description'][:150]}{'...' if len(a['description']) > 150 else ''}" for a in articles]
     )
 
+    # Construire le nouveau SystemPrompt
+    final_prompt = (
+        "Voici un résumé des dernières actualités françaises :\n\n"
+        f"{summarized_articles}\n\n"
+        "Lorsque l'utilisateur pose une question sur l'actualité, "
+        "réponds uniquement à partir de ces informations à jour."
+    )
+
+    # Sauvegarde dans la DB
     now = datetime.utcnow()
     system_prompt = db.exec(select(SystemPrompt)).first()
     if system_prompt:
@@ -559,7 +552,7 @@ def get_top_news(db: Session = Depends(get_db)):
     db.refresh(system_prompt)
 
     return {
-        "message": "Actualités politiques mises à jour",
+        "message": "Actualités mises à jour avec succès",
         "system_prompt_preview": final_prompt,
         "updated_at": now.isoformat()
     }
