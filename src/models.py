@@ -36,9 +36,10 @@ class Chat(SQLModel, table=True):
     press_review_title: Optional[str] = None
     press_review_summary: Optional[str] = None
     press_review_articles: Optional[List[dict]] = Field(
-        default_factory=list,
-        sa_column=Column(MutableList.as_mutable(JSON))
-    )
+    default_factory=list,
+    sa_column=Column(MutableList.as_mutable(JSON))
+)
+
 
     # Relation avec l'utilisateur
     user: Optional[User] = Relationship(back_populates="chats")

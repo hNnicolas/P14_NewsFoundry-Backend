@@ -279,7 +279,6 @@ def create_chat(
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
 
-    # La syntaxe correcte pour run_sync : user_prompt contient le message + système
     combined_prompt = f"{system_prompt_text}\n\n{user_message}"
 
     try:
@@ -349,53 +348,62 @@ def add_message(
     db: Session = Depends(get_db)
 ):
     message_content = payload.get("message", "")
-    if not message_content:
+    if not message_content.strip():
         raise HTTPException(status_code=400, detail="Message requis")
 
+    # Récupérer le chat
     chat = db.exec(
         select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
     ).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
 
+    # Ajouter le message utilisateur
     chat.messages.append({"role": "user", "content": message_content})
 
-    # Récupérer le prompt système actualisé
-    system_prompt = db.exec(select(SystemPrompt)).first()
-    system_prompt_text = (
-        system_prompt.prompt_text if system_prompt
-        else "Tu es l'assistant NewsFoundry."
-    )
+    # Récupérer le prompt système
+    system_prompt_obj = db.exec(select(SystemPrompt)).first()
+    system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
 
-    # ---------------------------
-    # Détection du mot-clé 
-    # ---------------------------
+    # Fusion prompt système + message utilisateur
+    combined_prompt = f"{system_prompt_text}\n\n{message_content}"
+
+    # Détection affirmative pour revue de presse
     if is_affirmative(message_content):
         idx = extract_article_index(message_content, 3)
         return generate_detailed_press_review(chat, db, article_index=idx)
 
-    # ---------------------------
-    # Réponse normale du chat
-    # ---------------------------
+    # Réponse normale
     try:
-        result = agent.run_sync(
-            message_content,
-            system_prompt=system_prompt_text
-        )
-        assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
+        result = agent.run_sync(user_prompt=combined_prompt)
+        assistant_content = getattr(result, "data", getattr(result, "output", str(result)))
+
+        # Sécurisation : convertir en string pour éviter JSON non serializable
+        if not isinstance(assistant_content, str):
+            assistant_content = str(assistant_content)
+
     except Exception as e_agent:
         raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
 
-    chat.messages.append({"role": "assistant", "content": assistant_response})
+    chat.messages.append({"role": "assistant", "content": assistant_content})
     chat.updated_at = datetime.utcnow()
+
+    # Vérification JSON avant commit
+    import json
+    try:
+        json.dumps(chat.messages)
+    except Exception as e_json:
+        raise HTTPException(status_code=500, detail=f"Erreur JSON: {str(e_json)}")
+
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
     return {
-        "assistant_response": assistant_response,
+        "assistant_response": assistant_content,
         "messages": chat.messages
     }
+
 
 # -------------------
 # Génération revue de presse détaillée
@@ -430,7 +438,7 @@ def generate_detailed_press_review(chat: Chat, db: Session, article_index: Optio
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
 
-    # Sauvegarde dans le chat (on ajoute un message assistant)
+    # Sauvegarde dans le chat 
     chat.messages.append({"role": "assistant", "content": detailed_review})
     chat.updated_at = datetime.utcnow()
 
@@ -469,9 +477,6 @@ def get_top_news(db: Session = Depends(get_db)):
             params=params,
             timeout=10
         )
-        print(f"[DEBUG] URL finale appelée: {response.url}")
-        print(f"[DEBUG] Status code: {response.status_code}")
-        print(f"[DEBUG] Response content: {response.text[:500]}")
         response.raise_for_status()
         data = response.json()
 
@@ -485,10 +490,8 @@ def get_top_news(db: Session = Depends(get_db)):
         articles = articles[:10]
         if not articles:
             raise HTTPException(status_code=404, detail="Aucun article trouvé")
-        print(f"[INFO] Nombre d'articles reçus: {len(articles)}")
         
     except requests.exceptions.HTTPError as e:
-        print(f"[ERROR] HTTPError: {e}")
         if e.response is not None:
             print(f"[ERROR] Response: {e.response.text}")
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
@@ -533,69 +536,53 @@ def get_top_news(db: Session = Depends(get_db)):
         "updated_at": now.isoformat()
     }
 
-
 @app.get("/search-news")
-def search_news(query: str, db: Session = Depends(get_db)):
+def search_news_full(
+    text: str = None,
+    text_match_indexes: str = None,
+    source_country: str = None,
+    language: str = None,
+    min_sentiment: float = None,
+    max_sentiment: float = None,
+    earliest_publish_date: str = None,
+    latest_publish_date: str = None,
+    news_sources: str = None,
+    authors: str = None,
+    categories: str = None,
+    entities: str = None,
+    location_filter: str = None,
+    sort: str = None,
+    sort_direction: str = None,
+    offset: int = None,
+    number: int = None,
+):
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
-    
+
+    params = {"api-key": WORLD_NEWS_API_KEY}
+
+    locals_dict = locals()
+    for key, value in locals_dict.items():
+        if key == "WORLD_NEWS_API_KEY":
+            continue
+        if value is not None:
+            params[key.replace("_", "-")] = value
+
     try:
         response = requests.get(
             "https://api.worldnewsapi.com/search-news",
-            params={
-                "apiKey": WORLD_NEWS_API_KEY,
-                "q": query,
-                "lang": "en", 
-                "sortBy": "relevance",
-                "pageSize": 10
-            }
+            params=params,
+            timeout=10
         )
         response.raise_for_status()
         data = response.json()
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
-    
-    # Extraire titre + résumé pour faciliter lecture par le LLM
-    articles = data.get("articles", [])[:10]
-    news_summary = [
-        {"title": a.get("title", ""), "description": a.get("description", ""), "url": a.get("url", "")}
-        for a in articles
-    ]
-    
-    return {"query": query, "articles": news_summary}
-
-@app.post("/chats/{chat_id}/press-review")
-def generate_press_review(chat_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Récupérer le chat
-    chat = db.exec(select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))).first()
-    if not chat:
-        raise HTTPException(status_code=404, detail="Discussion introuvable")
-
-    # Construire le texte à synthétiser à partir des messages
-    chat_history_text = "\n".join(f"{m['role']}: {m['content']}" for m in chat.messages)
-
-    # Générer la revue de presse
-    try:
-        result = press_review_agent.run_sync(chat_history_text)
-        review: PressReviewOutput = result.data  # correspond à notre Output model
-    except Exception as e_agent:
-        raise HTTPException(status_code=500, detail=f"Erreur génération revue de presse: {str(e_agent)}")
-
-    # Stocker dans le chat
-    chat.press_review_title = review.title
-    chat.press_review_summary = review.summary
-    chat.press_review_articles = review.articles
-    chat.updated_at = datetime.utcnow()
-
-    db.add(chat)
-    db.commit()
-    db.refresh(chat)
 
     return {
-        "chat_id": chat.id,
-        "press_review_title": chat.press_review_title,
-        "press_review_summary": chat.press_review_summary,
-        "press_review_articles": chat.press_review_articles
+        "params_used": params,
+        "response": data
     }
 
 
