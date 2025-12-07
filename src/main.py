@@ -362,47 +362,51 @@ def get_chat(chat_id: int, current_user: User = Depends(get_current_user), db: S
 # -------------------
 @app.post("/chats/{chat_id}/messages")
 def add_message(chat_id: int, payload: dict, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    message_content = payload.get("message", "")
-    if not message_content.strip():
+    message_content = payload.get("message", "").strip()
+    if not message_content:
         raise HTTPException(status_code=400, detail="Message requis")
 
-    # Récupérer le chat
-    chat = db.exec(select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))).first()
+    # ---- Récupérer le chat ----
+    chat = db.exec(
+        select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
+    ).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
 
-    # --- Manipuler messages correctement ---
+    # ---- Manipuler messages ----
     messages = chat.messages or []
     messages.append({"role": "user", "content": message_content})
-    chat.messages = messages
 
-    # Prompt système
+    # ---- Prompt système ----
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
-    system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
+    system_prompt_text = (
+        system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
+    )
 
-    # Vérification revue de presse
+    # ---- Vérification Revue de Presse ----
     if is_affirmative(message_content):
         idx = extract_article_index(message_content, 3)
         return generate_detailed_press_review(chat, db, article_index=idx)
 
-    # Appel LLM
+    # ---- Appel LLM via PydanticAI agent (OpenAI) ----
     try:
-        response = client.responses.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt_text},
-                {"role": "user", "content": message_content}
-            ]
-        )
-        assistant_content = response.output_text.replace("\x00", "")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e)}")
+        result = agent.run_sync(user_prompt=f"{system_prompt_text}\n\n{message_content}")
+        assistant_content = getattr(result, "data", getattr(result, "output", str(result)))
 
-    # Ajouter la réponse
+        # Sécurisation
+        if not isinstance(assistant_content, str):
+            assistant_content = str(assistant_content)
+        assistant_content = assistant_content.replace("\x00", "")
+
+    except Exception as e_agent:
+        raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
+
+    # ---- Ajouter réponse assistant ----
     messages.append({"role": "assistant", "content": assistant_content})
     chat.messages = messages
     chat.updated_at = datetime.utcnow()
 
+    # ---- Sauvegarde ----
     db.add(chat)
     db.commit()
     db.refresh(chat)
@@ -412,6 +416,7 @@ def add_message(chat_id: int, payload: dict, current_user: User = Depends(get_cu
         "messages": messages,
         "system_prompt_used": system_prompt_text
     }
+
 
 
 # -------------------
