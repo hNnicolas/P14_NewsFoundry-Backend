@@ -367,60 +367,65 @@ def add_message(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Récupérer le message utilisateur
+    import json
+
+    # ---- Récupérer le message utilisateur ----
     message_content = payload.get("message", "").strip()
     if not message_content:
         raise HTTPException(status_code=400, detail="Message requis")
 
-    # Récupérer le chat
+    # ---- Récupérer le chat depuis la DB ----
     chat = db.exec(
         select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
     ).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
 
-    # Ajouter le message utilisateur
+    # ---- Ajouter le message utilisateur à l'historique ----
     messages = chat.messages or []
     messages.append({"role": "user", "content": message_content})
 
-    # Vérification pour génération de revue de presse
+    # ---- Vérification Revue de Presse (optionnelle) ----
     if is_affirmative(message_content):
         idx = extract_article_index(message_content, 3)
-        # Utilise le press_review_agent séparé
         return generate_detailed_press_review(chat, db, article_index=idx)
 
-    # Construire le prompt complet pour le LLM principal
+    # ---- Charger le prompt système ----
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
-    system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
+    system_prompt_text = (
+        system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
+    )
 
-    conversation_text = system_prompt_text + "\n\n"
-    for msg in messages:
-        role = msg["role"].capitalize()
-        conversation_text += f"{role}: {msg['content']}\n"
+    # ---- Construire le prompt complet pour l’agent ----
+    conversation = [{"role": "system", "content": system_prompt_text}] + messages
 
-    # Appel de l'agent LLM pur (sans tools externes)
+    # ---- Appel LLM via PydanticAI agent ----
     try:
-        result = agent.run_sync(user_prompt=conversation_text)
+        result = agent.run_sync(user_prompt=conversation)
         assistant_content = getattr(result, "data", getattr(result, "output", str(result)))
         if not isinstance(assistant_content, str):
             assistant_content = str(assistant_content)
+        assistant_content = assistant_content.replace("\x00", "")
     except Exception as e_agent:
-        print("❌ ERREUR agent:", str(e_agent))
-        assistant_content = (
-            "⚠️ Je n'ai pas pu générer de réponse pour le moment, "
-            "mais la conversation a été mise à jour."
-        )
+        raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
 
-    # Ajouter la réponse assistant
+    # ---- Ajouter la réponse assistant à l'historique ----
     messages.append({"role": "assistant", "content": assistant_content})
-    chat.messages = messages
+    
+    # ---- Sécuriser le JSON avant sauvegarde ----
+    try:
+        chat.messages = json.loads(json.dumps(messages))  
+    except Exception as e_json:
+        raise HTTPException(status_code=500, detail=f"Messages non sérialisables: {str(e_json)}")
+
     chat.updated_at = datetime.utcnow()
 
-    # Sauvegarde
+    # ---- Sauvegarder dans la DB ----
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
+    # ---- Retour ----
     return {
         "assistant_response": assistant_content,
         "messages": chat.messages,
