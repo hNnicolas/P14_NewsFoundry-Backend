@@ -371,6 +371,7 @@ def add_message(
     # Détection affirmative pour revue de presse
     if is_affirmative(message_content):
         idx = extract_article_index(message_content, 3)
+        # On retourne directement la revue de presse détaillée si affirmative
         return generate_detailed_press_review(chat, db, article_index=idx)
 
     # Réponse normale
@@ -395,15 +396,16 @@ def add_message(
     except Exception as e_json:
         raise HTTPException(status_code=500, detail=f"Erreur JSON: {str(e_json)}")
 
+    # Sauvegarde en base
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
     return {
         "assistant_response": assistant_content,
-        "messages": chat.messages
+        "messages": chat.messages,
+        "system_prompt_used": system_prompt_text  # <-- Ajouté pour affichage/debug
     }
-
 
 # -------------------
 # Génération revue de presse détaillée
