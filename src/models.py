@@ -9,6 +9,7 @@ from datetime import datetime
 # Modèle Utilisateur
 # --------------------------
 class User(SQLModel, table=True):
+    __tablename__ = "users"
     id: Optional[int] = Field(default=None, primary_key=True)
     email: str = Field(unique=True, index=True)
     hashed_password: str = Field()
@@ -21,7 +22,7 @@ class User(SQLModel, table=True):
 # --------------------------
 class Chat(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int = Field(foreign_key="user.id", nullable=False)
+    user_id: int = Field(foreign_key="users.id", nullable=False)
     title: Optional[str] = Field(default="Nouvelle discussion")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
