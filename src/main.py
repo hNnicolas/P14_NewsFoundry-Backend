@@ -368,7 +368,7 @@ def add_message(
     db: Session = Depends(get_db)
 ):
     """
-    Ajoute un message utilisateur dans un chat existant et retourne la réponse du LLM.
+    Ajoute un message utilisateur dans un chat existant et retourne la réponse du LLM (OpenAI uniquement).
     """
 
     print("DEBUG: Payload reçu =", payload)
@@ -393,11 +393,6 @@ def add_message(
     messages.append({"role": "user", "content": message_content})
     print("DEBUG: messages après ajout utilisateur =", messages)
 
-    # --- Vérifier si le message déclenche une revue de presse (optionnel) ---
-    if is_affirmative(message_content):
-        idx = extract_article_index(message_content, 3)
-        return generate_detailed_press_review(chat, db, article_index=idx)
-
     # --- Charger le prompt système ---
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
@@ -407,7 +402,7 @@ def add_message(
     conversation = [{"role": "system", "content": system_prompt_text}] + messages
     print("DEBUG: conversation envoyée au LLM =", conversation)
 
-    # --- Appel du LLM via PydanticAI ---
+    # --- Appel du LLM via PydanticAI (OpenAI uniquement) ---
     try:
         result = agent.run_sync(user_prompt=conversation)
         assistant_content = getattr(result, "data", getattr(result, "output", str(result)))
@@ -445,11 +440,13 @@ def add_message(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Erreur DB: {str(e_db)}")
 
+    # --- Retour JSON ---
     return {
         "assistant_response": assistant_content,
         "messages": chat.messages,
         "system_prompt_used": system_prompt_text
     }
+
 
 # -------------------
 # Génération revue de presse détaillée
