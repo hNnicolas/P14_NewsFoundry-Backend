@@ -371,21 +371,27 @@ def add_message(
     Ajoute un message utilisateur dans un chat existant et retourne la réponse du LLM.
     """
 
+    print("DEBUG: Payload reçu =", payload)
+    print("DEBUG: Utilisateur courant =", current_user.email)
+
     # --- Récupérer le contenu utilisateur ---
     message_content = payload.get("message", "").strip()
     if not message_content:
         raise HTTPException(status_code=400, detail="Message requis")
+    print("DEBUG: message_content =", message_content)
 
     # --- Vérifier que le chat existe et appartient à l'utilisateur ---
     chat = db.exec(
         select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
     ).first()
+    print("DEBUG: chat récupéré =", chat)
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
 
     # --- Ajouter le message utilisateur à l'historique ---
     messages = chat.messages or []
     messages.append({"role": "user", "content": message_content})
+    print("DEBUG: messages après ajout utilisateur =", messages)
 
     # --- Vérifier si le message déclenche une revue de presse (optionnel) ---
     if is_affirmative(message_content):
@@ -395,9 +401,11 @@ def add_message(
     # --- Charger le prompt système ---
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
+    print("DEBUG: system_prompt_text =", system_prompt_text)
 
     # --- Construire le prompt complet pour le LLM ---
     conversation = [{"role": "system", "content": system_prompt_text}] + messages
+    print("DEBUG: conversation envoyée au LLM =", conversation)
 
     # --- Appel du LLM via PydanticAI ---
     try:
@@ -406,26 +414,37 @@ def add_message(
         if not isinstance(assistant_content, str):
             assistant_content = str(assistant_content)
         assistant_content = assistant_content.replace("\x00", "")
+        print("DEBUG: assistant_content =", assistant_content)
     except Exception as e_agent:
+        print("ERROR: appel LLM échoué", e_agent)
         raise HTTPException(status_code=500, detail=f"Erreur du modèle IA: {str(e_agent)}")
 
     # --- Ajouter la réponse assistant à l'historique ---
     messages.append({"role": "assistant", "content": assistant_content})
+    print("DEBUG: messages après ajout assistant =", messages)
 
     # --- Sérialiser proprement le JSON avant sauvegarde ---
     try:
         chat.messages = json.loads(json.dumps(messages))
+        print("DEBUG: messages sérialisés pour DB =", chat.messages)
     except Exception as e_json:
+        print("ERROR: messages non sérialisables", e_json)
         raise HTTPException(status_code=500, detail=f"Messages non sérialisables: {str(e_json)}")
 
     chat.updated_at = datetime.utcnow()
+    print("DEBUG: updated_at =", chat.updated_at)
 
     # --- Sauvegarder dans la DB ---
-    db.add(chat)
-    db.commit()
-    db.refresh(chat)
+    try:
+        db.add(chat)
+        db.commit()
+        db.refresh(chat)
+        print("DEBUG: chat sauvegardé avec succès")
+    except Exception as e_db:
+        print("ERROR: problème lors du commit DB", e_db)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Erreur DB: {str(e_db)}")
 
-    # --- Retour ---
     return {
         "assistant_response": assistant_content,
         "messages": chat.messages,
