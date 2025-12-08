@@ -483,26 +483,18 @@ def generate_detailed_press_review(chat: Chat, db: Session, article_index: Optio
 # -------------------
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
 # -------------------
-@app.get("/top-news")
-def get_top_news(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    # --- Vérification clé API ---
-    if not WORLD_NEWS_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="Clé API World News non configurée."
-        )
 
-    # --- Paramètres API ---
+@app.get("/top-news")
+def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if not WORLD_NEWS_API_KEY:
+        raise HTTPException(status_code=500, detail="Clé API World News non configurée")
+
     params = {
         "source-country": "fr",
         "language": "fr",
         "date": datetime.utcnow().strftime("%Y-%m-%d")
     }
 
-    # --- Appel API ---
     try:
         response = requests.get(
             WORLD_NEWS_URL,
@@ -513,88 +505,62 @@ def get_top_news(
         response.raise_for_status()
         data = response.json()
 
+        articles = []
+        for block in data.get("top_news", []):
+            for a in block.get("news", []):
+                articles.append({
+                    "title": a.get("title", ""),
+                    "description": a.get("text", "")
+                })
+        articles = articles[:10]
+
+        if not articles:
+            raise HTTPException(status_code=404, detail="Aucun article trouvé")
+
     except requests.exceptions.RequestException as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erreur API World News: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
 
-    # --- Extraction articles ---
-    articles = []
-    for block in data.get("top_news", []):
-        for a in block.get("news", []):
-            articles.append({
-                "title": a.get("title", ""),
-                "description": a.get("text", "")
-            })
+    # --- Générer un résumé simple pour le LLM et le message assistant ---
+    summarized_articles = "\n".join(
+        [f"- {a['title']}: {a['description'][:150]}{'...' if len(a['description']) > 150 else ''}" for a in articles]
+    )
 
-    articles = articles[:10]
-
-    if not articles:
-        raise HTTPException(
-            status_code=404,
-            detail="Aucun article trouvé."
-        )
-
-    # --- Résumé articles ---
-    summarized_articles = "\n".join([
-        f"- {a['title']}: {a['description'][:150]}{'...' if len(a['description']) > 150 else ''}"
-        for a in articles
-    ])
-
-    # --- Prompt système généré ---
+    # --- Mettre à jour le SystemPrompt pour le LLM ---
     final_prompt = (
         "Voici un résumé des dernières actualités françaises :\n\n"
         f"{summarized_articles}\n\n"
         "Lorsque l'utilisateur pose une question sur l'actualité, "
         "réponds uniquement à partir de ces informations à jour."
     )
-
     now = datetime.utcnow()
-
-    # --- Sauvegarde / Mise à jour du SystemPrompt dans Railway ---
     system_prompt = db.exec(select(SystemPrompt)).first()
-
     if system_prompt:
         system_prompt.prompt_text = final_prompt
         system_prompt.updated_at = now
     else:
-        system_prompt = SystemPrompt(
-            prompt_text=final_prompt,
-            updated_at=now
-        )
+        system_prompt = SystemPrompt(prompt_text=final_prompt, updated_at=now)
         db.add(system_prompt)
-
     db.commit()
     db.refresh(system_prompt)
 
-    # --- Ajout auto d'un message assistant dans le chat utilisateur ---
+    # --- Ajouter le message assistant dans le chat ---
     chat = db.exec(
-        select(Chat)
-        .where(Chat.user_id == current_user.id)
-        .order_by(Chat.updated_at.desc())
+        select(Chat).where(Chat.user_id == current_user.id).order_by(Chat.updated_at.desc())
     ).first()
 
     if chat:
-        # Sécurité : s'assurer que messages est une liste
-        if not isinstance(chat.messages, list):
-            chat.messages = []
-
         chat.messages.append({
             "role": "assistant",
-            "content": (
-                "📰 Voici les dernières actualités françaises mises à jour :\n\n"
-                f"{summarized_articles}"
-            )
+            "content": f"📰 Voici les dernières actualités françaises mises à jour :\n\n{summarized_articles}"
         })
-
         chat.updated_at = now
         db.add(chat)
         db.commit()
         db.refresh(chat)
 
     return {
-        "message": "Actualités mises à jour. Prompt sauvegardé dans la base.",
+        "message": "Actualités mises à jour et ajoutées dans le chat",
+        "system_prompt_preview": final_prompt,
         "chat_id": chat.id if chat else None,
         "updated_at": now.isoformat()
     }
