@@ -485,7 +485,10 @@ def generate_detailed_press_review(chat: Chat, db: Session, article_index: Optio
 # -------------------
 
 @app.get("/top-news")
-def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_top_news(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
 
@@ -495,6 +498,7 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
         "date": datetime.utcnow().strftime("%Y-%m-%d")
     }
 
+    # --- Appel API ---
     try:
         response = requests.get(
             WORLD_NEWS_URL,
@@ -512,40 +516,62 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
                     "title": a.get("title", ""),
                     "description": a.get("text", "")
                 })
+
         articles = articles[:10]
 
         if not articles:
-            raise HTTPException(status_code=404, detail="Aucun article trouvé")
+            raise HTTPException(
+                status_code=404,
+                detail="Aucun article trouvé"
+            )
 
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur API World News: {str(e)}"
+        )
 
-    # --- Générer un résumé simple pour le LLM et le message assistant ---
+    # --- Résumé articles ---
     summarized_articles = "\n".join(
-        [f"- {a['title']}: {a['description'][:150]}{'...' if len(a['description']) > 150 else ''}" for a in articles]
+        [
+            f"- {a['title']}: {a['description'][:150]}{'...' if len(a['description']) > 150 else ''}"
+            for a in articles
+        ]
     )
 
-    # --- Mettre à jour le SystemPrompt pour le LLM ---
+    # --- Prompt système LLM ---
     final_prompt = (
         "Voici un résumé des dernières actualités françaises :\n\n"
         f"{summarized_articles}\n\n"
         "Lorsque l'utilisateur pose une question sur l'actualité, "
         "réponds uniquement à partir de ces informations à jour."
     )
+
     now = datetime.utcnow()
+
+    # --- SAUVEGARDE DANS LA TABLE systemprompt ---
     system_prompt = db.exec(select(SystemPrompt)).first()
+
     if system_prompt:
+        # Mise à jour
         system_prompt.prompt_text = final_prompt
         system_prompt.updated_at = now
     else:
-        system_prompt = SystemPrompt(prompt_text=final_prompt, updated_at=now)
+        # Création si aucun prompt existant
+        system_prompt = SystemPrompt(
+            prompt_text=final_prompt,
+            updated_at=now
+        )
         db.add(system_prompt)
+
     db.commit()
     db.refresh(system_prompt)
 
-    # --- Ajouter le message assistant dans le chat ---
+    # --- Message assistant dans le chat ---
     chat = db.exec(
-        select(Chat).where(Chat.user_id == current_user.id).order_by(Chat.updated_at.desc())
+        select(Chat)
+        .where(Chat.user_id == current_user.id)
+        .order_by(Chat.updated_at.desc())
     ).first()
 
     if chat:
@@ -559,8 +585,7 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
         db.refresh(chat)
 
     return {
-        "message": "Actualités mises à jour et ajoutées dans le chat",
-        "system_prompt_preview": final_prompt,
+        "message": "Actualités mises à jour. Prompt sauvegardé dans la base.",
         "chat_id": chat.id if chat else None,
         "updated_at": now.isoformat()
     }
