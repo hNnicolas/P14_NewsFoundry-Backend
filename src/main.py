@@ -147,9 +147,19 @@ if not MODEL_NAME:
             "❌ Aucune clé API configurée! Ajoutez OPENAI_API_KEY ou HF_TOKEN dans l'environnement Railway"
         )
 
+# System prompt flexible et intelligent pour détecter toute demande de revue de presse
 agent = Agent(
     model=MODEL_NAME,
-    system_prompt="Tu es l'assistant NewsFoundry. Réponds de manière concise et informative en français."
+    system_prompt=(
+        "Tu es l'assistant NewsFoundry, expert en actualités et revues de presse. "
+        "Chaque fois que l'utilisateur demande des informations détaillées sur un sujet, "
+        "une revue de presse ou des articles récents, tu dois automatiquement appeler le tool "
+        "'advanced_search_news' avec le sujet exact. "
+        "Sois flexible : l'utilisateur peut formuler sa demande de manière naturelle. "
+        "Retourne toujours un résumé structuré : titre de la revue, synthèse générale, "
+        "liste d'articles avec titre et résumé, éventuellement le lien vers la source. "
+        "Si aucun sujet n'est clairement demandé, pose une question polie pour clarifier le sujet."
+    )
 )
 
 # -------------------
@@ -174,65 +184,6 @@ press_review_agent = Agent(
         "synthèse générale, et des synthèses pour chaque article."
     )
 )
-
-# -------------------
-# Tool : recherche avancée d’articles 
-# -------------------
-@agent.tool
-def advanced_search_news(context: RunContext, query: str) -> dict:
-    """
-    Recherche des articles sur un sujet spécifique via l'API /search-news.
-    Retourne une liste d’articles avec title, summary, url.
-    """
-    # Log pour debug
-    print("DEBUG: Tool 'advanced_search_news' appelé avec query =", query)
-
-    # Vérification clé API
-    if not WORLD_NEWS_API_KEY:
-        return {"error": "Clé API World News manquante."}
-
-    # Vérification de la requête
-    if not query or len(query.strip()) < 3:
-        return {"error": "La requête doit contenir au moins 3 caractères."}
-
-    try:
-        # Requête vers l'API
-        response = requests.get(
-            "https://api.worldnewsapi.com/search-news",
-            headers={"x-api-key": WORLD_NEWS_API_KEY},
-            params={
-                "text": query,
-                "language": "fr",
-                "number": 10,
-            },
-            timeout=10
-        )
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        print("ERROR: API World News échouée", e)
-        return {"error": f"Erreur API World News : {str(e)}"}
-
-    news = data.get("news", [])
-    results = []
-
-    for n in news:
-        results.append({
-            "title": n.get("title", "Titre indisponible"),
-            "summary": (n.get("summary") or "")[:300],
-            "url": n.get("url", "")
-        })
-
-    if not results:
-        return {"query": query, "count": 0, "articles": [], "message": "Aucun article trouvé"}
-
-    return {
-        "query": query,
-        "count": len(results),
-        "articles": results
-    }
-
-
 
 # -------------------
 # Routes simples
@@ -270,9 +221,7 @@ def create_chat(
     payload: dict = {},
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
-):
-    print("DEBUG: Début création chat avec payload =", payload)
-    
+):    
     user_message = payload.get("message", "").strip()
     assistant_message = payload.get("assistant_message", "").strip()
 
@@ -283,11 +232,9 @@ def create_chat(
 
     if user_message:
         messages.append({"role": "user", "content": user_message})
-        print("DEBUG: message utilisateur ajouté =", user_message)
 
     if assistant_message:
         messages.append({"role": "assistant", "content": assistant_message})
-        print("DEBUG: message assistant initial ajouté =", assistant_message)
 
     chat = Chat(
         user_id=current_user.id,
@@ -300,16 +247,13 @@ def create_chat(
     db.add(chat)
     db.commit()
     db.refresh(chat)
-    print("DEBUG: chat créé en DB avec id =", chat.id)
 
     # Récupérer le system prompt
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
-    print("DEBUG: system_prompt_text =", system_prompt_text)
 
     # Construire le prompt pour l'agent
     combined_prompt = f"{system_prompt_text}\n\n{user_message}" if user_message else assistant_message
-    print("DEBUG: prompt combiné envoyé à l'agent =", combined_prompt)
 
     # Appel agent
     try:
@@ -317,7 +261,6 @@ def create_chat(
         assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
         if not isinstance(assistant_response, str):
             assistant_response = str(assistant_response)
-        print("DEBUG: réponse agent =", assistant_response)
     except Exception as e:
         assistant_response = (
             "⚠️ Je n'ai pas pu récupérer les actualités pour le moment, "
@@ -329,13 +272,11 @@ def create_chat(
     if assistant_response:
         chat.messages.append({"role": "assistant", "content": assistant_response})
         chat.updated_at = datetime.utcnow()
-        print("DEBUG: message assistant ajouté au chat")
 
         try:
             db.add(chat)
             db.commit()
             db.refresh(chat)
-            print("DEBUG: chat mis à jour avec réponse assistant")
         except Exception as e_db:
             db.rollback()
             print("❌ ERREUR DB lors de la sauvegarde chat :", str(e_db))
@@ -387,102 +328,83 @@ def get_chat(chat_id: int, current_user: User = Depends(get_current_user), db: S
 # -------------------
 # Ajouter un message
 # -------------------
+# -------------------
+# Ajouter un message intelligent avec détection automatique de revue de presse
+# -------------------
 @app.post("/chats/{chat_id}/messages")
-def add_message(
+def add_message_smart(
     chat_id: int,
     payload: dict,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Ajoute un message utilisateur dans un chat existant et retourne la réponse du LLM,
-    en utilisant les tools définis (ex: advanced_search_news).
+    Ajoute un message utilisateur dans un chat existant et retourne la réponse de l'agent.
+    L'agent détecte automatiquement toute demande de revue de presse et appelle le tool
+    'advanced_search_news' si nécessaire.
     """
-
-    print("DEBUG: Payload reçu =", payload)
-    print("DEBUG: Utilisateur courant =", current_user.email)
-
-    # --- Récupérer le contenu utilisateur ---
     message_content = payload.get("message", "").strip()
     if not message_content:
         raise HTTPException(status_code=400, detail="Message requis")
-    print("DEBUG: message_content =", message_content)
 
-    # --- Vérifier que le chat existe et appartient à l'utilisateur ---
-    chat = db.exec(
-        select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
-    ).first()
+    # --- Récupérer le chat ---
+    chat = db.exec(select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
-    print("DEBUG: chat récupéré =", chat)
 
-    # --- Ajouter le message utilisateur à l'historique ---
     messages = chat.messages or []
     messages.append({"role": "user", "content": message_content})
-    print("DEBUG: messages après ajout utilisateur =", messages)
 
-    # --- Charger le prompt système ---
+    # --- Charger ou créer system prompt intelligent ---
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else (
-        "Tu es l'assistant NewsFoundry. "
-        "Si l'utilisateur demande une revue de presse ou des actualités détaillées, "
-        "tu dois appeler le tool 'advanced_search_news' avec le sujet exact et présenter les articles de façon claire. "
-        "Sinon, répond normalement."
+        "Tu es l'assistant NewsFoundry, expert en actualités et revues de presse. "
+        "Chaque fois que l'utilisateur demande des informations détaillées sur un sujet, "
+        "une revue de presse ou des articles récents, tu dois automatiquement appeler le tool "
+        "'advanced_search_news' avec le sujet exact. "
+        "Sois flexible : l'utilisateur peut formuler sa demande de manière naturelle. "
+        "Retourne toujours un résumé structuré : titre de la revue, synthèse générale, "
+        "liste d'articles avec titre et résumé, éventuellement le lien vers la source. "
+        "Si aucun sujet n'est clairement demandé, pose une question polie pour clarifier le sujet."
     )
-    system_prompt_text = system_prompt_text[:3000] + "..." if len(system_prompt_text) > 3000 else system_prompt_text
-    print("DEBUG: system_prompt_text =", system_prompt_text)
 
-    # --- Construire le prompt complet pour le LLM ---
-    conversation = [{"role": "system", "content": system_prompt_text}] + messages
-    print("DEBUG: conversation envoyée au LLM =", conversation)
+    # --- Conversion conversation en texte brut pour l'agent ---
+    raw_prompt = "\n".join([f"{m['role']}: {m['content']}" for m in [{"role": "system", "content": system_prompt_text}] + messages])
+    print("Raw prompt envoyé au LLM:", raw_prompt)
 
-    # --- Appel du LLM via PydanticAI ---
+    # --- Appel agent avec tool 'advanced_search_news' ---
     try:
         result = agent.run_sync(
-            user_prompt=conversation
+            user_prompt=raw_prompt,
+            tools=[advanced_search_news],
+            max_iterations=2
         )
 
-        # Extraire le contenu
         if isinstance(result, dict) and "content" in result:
             assistant_content = result["content"]
         else:
             assistant_content = str(result)
 
-        assistant_content = assistant_content.replace("\x00", "")
-        print("DEBUG: assistant_content =", assistant_content)
-
     except Exception as e_agent:
-        print("ERROR: appel LLM échoué", e_agent)
+        print("ERROR: appel LLM échoué:", e_agent)
         assistant_content = (
             "⚠️ Je n'ai pas pu traiter votre demande pour le moment, "
             "mais la conversation a bien été enregistrée."
         )
 
-    # --- Ajouter la réponse assistant à l'historique ---
+    # --- Ajouter réponse assistant à l'historique ---
     messages.append({"role": "assistant", "content": assistant_content})
-    print("DEBUG: messages après ajout assistant =", messages)
-
-    # --- Sérialiser correctement le JSON avant sauvegarde ---
     try:
         chat.messages = json.loads(json.dumps(messages))
-    except Exception as e_json:
-        print("ERROR: messages non sérialisables", e_json)
-        raise HTTPException(status_code=500, detail=f"Messages non sérialisables: {str(e_json)}")
-
-    chat.updated_at = datetime.utcnow()
-
-    # --- Sauvegarder dans la DB ---
-    try:
+        chat.updated_at = datetime.utcnow()
         db.add(chat)
         db.commit()
         db.refresh(chat)
-        print("DEBUG: chat sauvegardé avec succès")
     except Exception as e_db:
-        print("ERROR: problème lors du commit DB", e_db)
         db.rollback()
+        print("ERROR DB:", e_db)
         raise HTTPException(status_code=500, detail=f"Erreur DB: {str(e_db)}")
 
-    # --- Retour JSON ---
     return {
         "assistant_response": assistant_content,
         "messages": chat.messages,
@@ -624,57 +546,60 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
         "chat_id": chat.id if chat else None,
         "updated_at": now.isoformat()
     }
-
-
-
-@app.get("/search-news")
-def search_news_full(
-    text: str = None,
-    text_match_indexes: str = None,
-    source_country: str = None,
-    language: str = None,
-    min_sentiment: float = None,
-    max_sentiment: float = None,
-    earliest_publish_date: str = None,
-    latest_publish_date: str = None,
-    news_sources: str = None,
-    authors: str = None,
-    categories: str = None,
-    entities: str = None,
-    location_filter: str = None,
-    sort: str = None,
-    sort_direction: str = None,
-    offset: int = None,
-    number: int = None,
-):
+    
+# -------------------
+# Tool : recherche avancée d’articles 
+# -------------------
+@agent.tool
+def advanced_search_news(context: RunContext, query: str, language: str = "fr", number: int = 10) -> dict:
     if not WORLD_NEWS_API_KEY:
-        raise HTTPException(status_code=500, detail="Clé API World News non configurée")
+        return {"error": "Clé API World News manquante."}
 
-    params = {"api-key": WORLD_NEWS_API_KEY}
-
-    locals_dict = locals()
-    for key, value in locals_dict.items():
-        if key == "WORLD_NEWS_API_KEY":
-            continue
-        if value is not None:
-            params[key.replace("_", "-")] = value
+    if not query or len(query.strip()) < 3:
+        return {"error": "La requête doit contenir au moins 3 caractères."}
 
     try:
         response = requests.get(
             "https://api.worldnewsapi.com/search-news",
-            params=params,
+            headers={"x-api-key": WORLD_NEWS_API_KEY},
+            params={
+                "text": query,
+                "language": language,
+                "number": number,
+                "sort": "publish-time",
+                "sort-direction": "DESC"
+            },
             timeout=10
         )
         response.raise_for_status()
         data = response.json()
-
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
+        return {"error": f"Erreur API World News : {str(e)}"}
+
+    articles = []
+    for n in data.get("news", []):
+        articles.append({
+            "title": n.get("title"),
+            "summary": n.get("summary"),
+            "content": n.get("text"),
+            "url": n.get("url"),
+            "image": n.get("image"),
+            "video": n.get("video"),
+            "publish_date": n.get("publish_date"),
+            "authors": n.get("authors", []),
+            "category": n.get("category"),
+            "language": n.get("language"),
+            "source_country": n.get("source_country"),
+            "sentiment": n.get("sentiment")
+        })
 
     return {
-        "params_used": params,
-        "response": data
+        "query": query,
+        "count": len(articles),
+        "available": data.get("available", len(articles)),
+        "articles": articles
     }
+
 
 
 # -------------------
