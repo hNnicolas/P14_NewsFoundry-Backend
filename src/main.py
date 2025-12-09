@@ -176,7 +176,7 @@ press_review_agent = Agent(
 )
 
 # -------------------
-# Tool : recherche avancée d’articles (à utiliser par l’agent)
+# Tool : recherche avancée d’articles 
 # -------------------
 @agent.tool
 def advanced_search_news(context: RunContext, query: str) -> dict:
@@ -377,7 +377,8 @@ def add_message(
     db: Session = Depends(get_db)
 ):
     """
-    Ajoute un message utilisateur dans un chat existant et retourne la réponse du LLM (OpenAI uniquement).
+    Ajoute un message utilisateur dans un chat existant et retourne la réponse du LLM,
+    en utilisant les tools définis (ex: advanced_search_news).
     """
 
     print("DEBUG: Payload reçu =", payload)
@@ -404,7 +405,12 @@ def add_message(
 
     # --- Charger le prompt système ---
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
-    system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
+    system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else (
+        "Tu es l'assistant NewsFoundry. "
+        "Si l'utilisateur te demande des actualités détaillées, utilise le tool 'advanced_search_news' "
+        "en fournissant la requête exacte. "
+        "Sinon, répond normalement."
+    )
     # Limiter la taille du prompt si très long
     system_prompt_text = system_prompt_text[:3000] + "..." if len(system_prompt_text) > 3000 else system_prompt_text
     print("DEBUG: system_prompt_text =", system_prompt_text)
@@ -413,12 +419,14 @@ def add_message(
     conversation = [{"role": "system", "content": system_prompt_text}] + messages
     print("DEBUG: conversation envoyée au LLM =", conversation)
 
-    # --- Appel du LLM via PydanticAI (OpenAI uniquement) ---
+    # --- Appel du LLM via PydanticAI avec tools ---
     try:
-        # Forcer retour brut (string) pour éviter les erreurs de type
-        result = agent.run_sync(user_prompt=conversation, parse_with=None)
+        result = agent.run_sync(
+            user_prompt=conversation,
+            parse_with=agent.tools  # ← ici on permet au LLM d'appeler les tools
+        )
 
-        # Extraire le contenu si result est un dict {role, content} ou convertir en string
+        # Extraire le contenu
         if isinstance(result, dict) and "content" in result:
             assistant_content = result["content"]
         else:
