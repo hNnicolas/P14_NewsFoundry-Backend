@@ -184,6 +184,7 @@ def advanced_search_news(context: RunContext, query: str) -> dict:
     Recherche des articles sur un sujet spécifique via /search-news.
     Retourne une liste simple d’articles : title, summary, url.
     """
+    print("DEBUG: Tool 'advanced_search_news' appelé avec query =", query)  
     if not WORLD_NEWS_API_KEY:
         return {"error": "Clé API World News manquante."}
 
@@ -423,7 +424,7 @@ def add_message(
     try:
         result = agent.run_sync(
             user_prompt=conversation,
-            parse_with=agent.tools  # ← ici on permet au LLM d'appeler les tools
+            parse_with=agent.tools
         )
 
         # Extraire le contenu
@@ -473,7 +474,7 @@ def add_message(
         "assistant_response": assistant_content,
         "messages": chat.messages,
         "system_prompt_used": system_prompt_text,
-        "user_prompt_received": message_content  # affichage du prompt reçu
+        "user_prompt_received": message_content  
     }
 
 
