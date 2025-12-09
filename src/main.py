@@ -568,7 +568,7 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
     # --- Créer le message structuré pour l'assistant ---
     top_title = articles[0]["title"] if articles else "Actualités"
     top_articles_list = "\n".join(
-        [f"<li>{a['title']}</li>" for a in articles[:3]]
+        [f"- {a['title']}" for a in articles[:3]]
     )
     assistant_message = (
         f"Voici un résumé des dernières {top_title} :\n\n"
@@ -577,11 +577,7 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
     )
 
     # --- Mettre à jour le SystemPrompt ---
-    system_prompt_text = (
-        f"{assistant_message}\n\n"
-        "Lorsque l'utilisateur pose une question sur l'actualité, "
-        "réponds uniquement à partir de ces informations à jour."
-    )
+    system_prompt_text = assistant_message  # plus de phrase supplémentaire
     now = datetime.utcnow()
     system_prompt = db.exec(select(SystemPrompt)).first()
     if system_prompt:
