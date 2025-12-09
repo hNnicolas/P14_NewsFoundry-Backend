@@ -181,17 +181,22 @@ press_review_agent = Agent(
 @agent.tool
 def advanced_search_news(context: RunContext, query: str) -> dict:
     """
-    Recherche des articles sur un sujet spécifique via /search-news.
-    Retourne une liste simple d’articles : title, summary, url.
+    Recherche des articles sur un sujet spécifique via l'API /search-news.
+    Retourne une liste d’articles avec title, summary, url.
     """
-    print("DEBUG: Tool 'advanced_search_news' appelé avec query =", query)  
+    # Log pour debug
+    print("DEBUG: Tool 'advanced_search_news' appelé avec query =", query)
+
+    # Vérification clé API
     if not WORLD_NEWS_API_KEY:
         return {"error": "Clé API World News manquante."}
 
-    if not query or len(query) < 3:
+    # Vérification de la requête
+    if not query or len(query.strip()) < 3:
         return {"error": "La requête doit contenir au moins 3 caractères."}
 
     try:
+        # Requête vers l'API
         response = requests.get(
             "https://api.worldnewsapi.com/search-news",
             headers={"x-api-key": WORLD_NEWS_API_KEY},
@@ -205,6 +210,7 @@ def advanced_search_news(context: RunContext, query: str) -> dict:
         response.raise_for_status()
         data = response.json()
     except Exception as e:
+        print("ERROR: API World News échouée", e)
         return {"error": f"Erreur API World News : {str(e)}"}
 
     news = data.get("news", [])
@@ -212,16 +218,21 @@ def advanced_search_news(context: RunContext, query: str) -> dict:
 
     for n in news:
         results.append({
-            "title": n.get("title", ""),
-            "summary": n.get("summary", "")[:300],
+            "title": n.get("title", "Titre indisponible"),
+            "summary": (n.get("summary") or "")[:300],
             "url": n.get("url", "")
         })
+
+    if not results:
+        return {"query": query, "count": 0, "articles": [], "message": "Aucun article trouvé"}
 
     return {
         "query": query,
         "count": len(results),
         "articles": results
     }
+
+
 
 # -------------------
 # Routes simples
@@ -423,7 +434,6 @@ def add_message(
     try:
         result = agent.run_sync(
             user_prompt=conversation
-            # parse_with peut être omis pour laisser l'agent utiliser automatiquement les tools
         )
 
         # Extraire le contenu
