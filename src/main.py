@@ -176,56 +176,51 @@ press_review_agent = Agent(
 )
 
 # -------------------
-# Endpoint FastAPI pour générer la revue de presse
-# -------------------
-@app.post("/press-review", response_model=PressReviewOutputModel)
-def generate_press_review(prompt: str, user=Depends(get_current_user)):
-    # On utilise agent.call() avec parse_with pour obtenir un objet Pydantic
-    response = press_review_agent.call(
-        prompt=prompt,
-        parse_with=PressReviewOutputModel
-    )
-    return response
-
-# -------------------
-# Tool : recherche d’articles
+# Tool : recherche avancée d’articles (à utiliser par l’agent)
 # -------------------
 @agent.tool
-def search_news(context: RunContext = None, query: str = "") -> str:
-    """Retourne les articles récents. Filtre par mot-clé si query fourni."""
+def advanced_search_news(context: RunContext, query: str) -> dict:
+    """
+    Recherche des articles sur un sujet spécifique via /search-news.
+    Retourne une liste simple d’articles : title, summary, url.
+    """
     if not WORLD_NEWS_API_KEY:
-        raise HTTPException(status_code=500, detail="Clé API World News manquante")
+        return {"error": "Clé API World News manquante."}
+
+    if not query or len(query) < 3:
+        return {"error": "La requête doit contenir au moins 3 caractères."}
 
     try:
-        r = requests.get(
-            WORLD_NEWS_URL,
+        response = requests.get(
+            "https://api.worldnewsapi.com/search-news",
+            headers={"x-api-key": WORLD_NEWS_API_KEY},
             params={
-                "apiKey": WORLD_NEWS_API_KEY,
-                "lang": "en",
-                "pageSize": 50
-            }
+                "text": query,
+                "language": "fr",
+                "number": 10,
+            },
+            timeout=10
         )
-        r.raise_for_status()
-        data = r.json()
+        response.raise_for_status()
+        data = response.json()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur World News API: {e}")
+        return {"error": f"Erreur API World News : {str(e)}"}
 
-    articles = data.get("articles", [])
-    if query:
-        query_lower = query.lower()
-        articles = [
-            a for a in articles
-            if query_lower in (a.get("title") or "").lower() or
-               query_lower in (a.get("description") or "").lower()
-        ]
+    news = data.get("news", [])
+    results = []
 
-    if not articles:
-        return "Aucun article trouvé."
+    for n in news:
+        results.append({
+            "title": n.get("title", ""),
+            "summary": n.get("summary", "")[:300],
+            "url": n.get("url", "")
+        })
 
-    return "\n".join(
-        f"- {a.get('title','')} : {a.get('description','')}"
-        for a in articles[:10]
-    )
+    return {
+        "query": query,
+        "count": len(results),
+        "articles": results
+    }
 
 # -------------------
 # Routes simples
@@ -577,7 +572,7 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
     )
 
     # --- Mettre à jour le SystemPrompt ---
-    system_prompt_text = assistant_message  # plus de phrase supplémentaire
+    system_prompt_text = assistant_message 
     now = datetime.utcnow()
     system_prompt = db.exec(select(SystemPrompt)).first()
     if system_prompt:
