@@ -271,24 +271,24 @@ def create_chat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    print("DEBUG: Début création chat avec payload =", payload)
+    
     user_message = payload.get("message", "").strip()
     assistant_message = payload.get("assistant_message", "").strip()
 
-    # ❌ ERREUR SI RIEN -> on refuse
     if not user_message and not assistant_message:
         raise HTTPException(status_code=400, detail="Aucun message fourni")
 
     messages = []
 
-    # Si l'utilisateur a écrit un message → on l'ajoute
     if user_message:
         messages.append({"role": "user", "content": user_message})
+        print("DEBUG: message utilisateur ajouté =", user_message)
 
-    # Si on a un message assistant (cas revue de presse)
     if assistant_message:
         messages.append({"role": "assistant", "content": assistant_message})
+        print("DEBUG: message assistant initial ajouté =", assistant_message)
 
-    # Création du chat
     chat = Chat(
         user_id=current_user.id,
         title=payload.get("title", "Nouvelle conversation"),
@@ -300,40 +300,46 @@ def create_chat(
     db.add(chat)
     db.commit()
     db.refresh(chat)
+    print("DEBUG: chat créé en DB avec id =", chat.id)
 
-    # 🟦 Si pas de message user → ne pas appeler l'IA
-    if not user_message:
-        return {
-            "chat_id": chat.id,
-            "assistant_response": assistant_message,
-            "messages": chat.messages
-        }
-
-    # 🟩 Sinon → appel IA normal
+    # Récupérer le system prompt
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
+    print("DEBUG: system_prompt_text =", system_prompt_text)
 
-    combined_prompt = f"{system_prompt_text}\n\n{user_message}"
+    # Construire le prompt pour l'agent
+    combined_prompt = f"{system_prompt_text}\n\n{user_message}" if user_message else assistant_message
+    print("DEBUG: prompt combiné envoyé à l'agent =", combined_prompt)
 
+    # Appel agent
     try:
         result = agent.run_sync(user_prompt=combined_prompt)
         assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
         if not isinstance(assistant_response, str):
             assistant_response = str(assistant_response)
+        print("DEBUG: réponse agent =", assistant_response)
     except Exception as e:
         assistant_response = (
             "⚠️ Je n'ai pas pu récupérer les actualités pour le moment, "
             "mais la conversation a bien été créée. Tu peux continuer à discuter normalement."
         )
-        print("❌ ERREUR IA :", str(e))
+        print("❌ ERREUR IA lors de la création du chat :", str(e))
 
-    # Ajout message assistant IA
-    chat.messages.append({"role": "assistant", "content": assistant_response})
-    chat.updated_at = datetime.utcnow()
+    # Ajouter la réponse de l'assistant au chat
+    if assistant_response:
+        chat.messages.append({"role": "assistant", "content": assistant_response})
+        chat.updated_at = datetime.utcnow()
+        print("DEBUG: message assistant ajouté au chat")
 
-    db.add(chat)
-    db.commit()
-    db.refresh(chat)
+        try:
+            db.add(chat)
+            db.commit()
+            db.refresh(chat)
+            print("DEBUG: chat mis à jour avec réponse assistant")
+        except Exception as e_db:
+            db.rollback()
+            print("❌ ERREUR DB lors de la sauvegarde chat :", str(e_db))
+            raise HTTPException(status_code=500, detail=f"Erreur DB: {str(e_db)}")
 
     return {
         "chat_id": chat.id,
