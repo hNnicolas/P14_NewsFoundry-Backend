@@ -408,11 +408,10 @@ def add_message(
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else (
         "Tu es l'assistant NewsFoundry. "
-        "Si l'utilisateur te demande des actualités détaillées, utilise le tool 'advanced_search_news' "
-        "en fournissant la requête exacte. "
+        "Si l'utilisateur demande une revue de presse ou des actualités détaillées, "
+        "tu dois appeler le tool 'advanced_search_news' avec le sujet exact et présenter les articles de façon claire. "
         "Sinon, répond normalement."
     )
-    # Limiter la taille du prompt si très long
     system_prompt_text = system_prompt_text[:3000] + "..." if len(system_prompt_text) > 3000 else system_prompt_text
     print("DEBUG: system_prompt_text =", system_prompt_text)
 
@@ -420,11 +419,11 @@ def add_message(
     conversation = [{"role": "system", "content": system_prompt_text}] + messages
     print("DEBUG: conversation envoyée au LLM =", conversation)
 
-    # --- Appel du LLM via PydanticAI avec tools ---
+    # --- Appel du LLM via PydanticAI ---
     try:
         result = agent.run_sync(
-            user_prompt=conversation,
-            parse_with=agent.tools
+            user_prompt=conversation
+            # parse_with peut être omis pour laisser l'agent utiliser automatiquement les tools
         )
 
         # Extraire le contenu
@@ -433,13 +432,11 @@ def add_message(
         else:
             assistant_content = str(result)
 
-        # Nettoyage caractères invisibles
         assistant_content = assistant_content.replace("\x00", "")
         print("DEBUG: assistant_content =", assistant_content)
 
     except Exception as e_agent:
         print("ERROR: appel LLM échoué", e_agent)
-        # Réponse fallback si OpenAI échoue
         assistant_content = (
             "⚠️ Je n'ai pas pu traiter votre demande pour le moment, "
             "mais la conversation a bien été enregistrée."
@@ -474,7 +471,7 @@ def add_message(
         "assistant_response": assistant_content,
         "messages": chat.messages,
         "system_prompt_used": system_prompt_text,
-        "user_prompt_received": message_content  
+        "user_prompt_received": message_content
     }
 
 
