@@ -265,15 +265,27 @@ def create_chat(
     db: Session = Depends(get_db)
 ):
     user_message = payload.get("message", "").strip()
+    assistant_message = payload.get("assistant_message", "").strip()
 
-    if not user_message:
-        raise HTTPException(status_code=400, detail="Message requis")
+    # ❌ ERREUR SI RIEN -> on refuse
+    if not user_message and not assistant_message:
+        raise HTTPException(status_code=400, detail="Aucun message fourni")
 
-    # Création du chat en base 
+    messages = []
+
+    # Si l'utilisateur a écrit un message → on l'ajoute
+    if user_message:
+        messages.append({"role": "user", "content": user_message})
+
+    # Si on a un message assistant (cas revue de presse)
+    if assistant_message:
+        messages.append({"role": "assistant", "content": assistant_message})
+
+    # Création du chat
     chat = Chat(
         user_id=current_user.id,
         title=payload.get("title", "Nouvelle conversation"),
-        messages=[{"role": "user", "content": user_message}],
+        messages=messages,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
@@ -282,38 +294,40 @@ def create_chat(
     db.commit()
     db.refresh(chat)
 
-    # Récupération du prompt système
+    # 🟦 Si pas de message user → ne pas appeler l'IA
+    if not user_message:
+        return {
+            "chat_id": chat.id,
+            "assistant_response": assistant_message,
+            "messages": chat.messages
+        }
+
+    # 🟩 Sinon → appel IA normal
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else "Tu es l'assistant NewsFoundry."
 
     combined_prompt = f"{system_prompt_text}\n\n{user_message}"
 
-    # Tentative de génération IA 
     try:
         result = agent.run_sync(user_prompt=combined_prompt)
         assistant_response = getattr(result, "data", getattr(result, "output", str(result)))
-
         if not isinstance(assistant_response, str):
             assistant_response = str(assistant_response)
-
     except Exception as e:
         assistant_response = (
             "⚠️ Je n'ai pas pu récupérer les actualités pour le moment, "
-            "mais la conversation a bien été créée. "
-            "Tu peux continuer à discuter normalement."
+            "mais la conversation a bien été créée. Tu peux continuer à discuter normalement."
         )
         print("❌ ERREUR IA :", str(e))
 
-    # On ajoute une réponse assistant
+    # Ajout message assistant IA
     chat.messages.append({"role": "assistant", "content": assistant_response})
     chat.updated_at = datetime.utcnow()
 
-    # Sauvegarde
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
-    # Renvoi du chat_id
     return {
         "chat_id": chat.id,
         "assistant_response": assistant_response,
