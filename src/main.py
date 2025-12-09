@@ -533,7 +533,9 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
     params = {
         "source-country": "fr",
         "language": "fr",
-        "date": datetime.utcnow().strftime("%Y-%m-%d")
+        "date": datetime.utcnow().strftime("%Y-%m-%d"),
+        "headlines-only": "false",
+        "max-news-per-cluster": 1
     }
 
     try:
@@ -546,12 +548,14 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
         response.raise_for_status()
         data = response.json()
 
+        # Extraire les articles
         articles = []
-        for block in data.get("top_news", []):
-            for a in block.get("news", []):
+        for cluster in data.get("top_news", []):
+            for a in cluster.get("news", []):
                 articles.append({
                     "title": a.get("title", ""),
-                    "description": a.get("text", "")
+                    "summary": a.get("summary") or a.get("text", ""),
+                    "url": a.get("url", "")
                 })
         articles = articles[:10]
 
@@ -561,39 +565,40 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
 
-    # --- Générer un résumé simple pour le LLM et le message assistant ---
-    summarized_articles = "\n".join(
-        [f"- {a['title']}: {a['description'][:150]}{'...' if len(a['description']) > 150 else ''}" for a in articles]
+    # --- Créer le message structuré pour l'assistant ---
+    top_title = articles[0]["title"] if articles else "Actualités"
+    top_articles_list = "\n".join(
+        [f"<li>{a['title']}</li>" for a in articles[:3]]
+    )
+    assistant_message = (
+        f"Voici un résumé des dernières {top_title} :\n\n"
+        f"{top_articles_list}\n\n"
+        "Souhaitez-vous que je génère une revue de presse détaillée sur l'un de ces sujets ?"
     )
 
-    # --- Mettre à jour le SystemPrompt pour le LLM ---
-    final_prompt = (
-        "Voici un résumé des dernières actualités françaises :\n\n"
-        f"{summarized_articles}\n\n"
+    # --- Mettre à jour le SystemPrompt ---
+    system_prompt_text = (
+        f"{assistant_message}\n\n"
         "Lorsque l'utilisateur pose une question sur l'actualité, "
         "réponds uniquement à partir de ces informations à jour."
     )
     now = datetime.utcnow()
     system_prompt = db.exec(select(SystemPrompt)).first()
     if system_prompt:
-        system_prompt.prompt_text = final_prompt
+        system_prompt.prompt_text = system_prompt_text
         system_prompt.updated_at = now
     else:
-        system_prompt = SystemPrompt(prompt_text=final_prompt, updated_at=now)
+        system_prompt = SystemPrompt(prompt_text=system_prompt_text, updated_at=now)
         db.add(system_prompt)
     db.commit()
     db.refresh(system_prompt)
 
-    # --- Ajouter le message assistant dans le chat ---
+    # --- Ajouter le message dans le chat ---
     chat = db.exec(
         select(Chat).where(Chat.user_id == current_user.id).order_by(Chat.updated_at.desc())
     ).first()
-
     if chat:
-        chat.messages.append({
-            "role": "assistant",
-            "content": f"📰 Voici les dernières actualités françaises mises à jour :\n\n{summarized_articles}"
-        })
+        chat.messages.append({"role": "assistant", "content": assistant_message})
         chat.updated_at = now
         db.add(chat)
         db.commit()
@@ -601,10 +606,12 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
 
     return {
         "message": "Actualités mises à jour et ajoutées dans le chat",
-        "system_prompt_preview": final_prompt,
+        "assistant_message": assistant_message,
+        "system_prompt_preview": system_prompt_text,
         "chat_id": chat.id if chat else None,
         "updated_at": now.isoformat()
     }
+
 
 
 @app.get("/search-news")
