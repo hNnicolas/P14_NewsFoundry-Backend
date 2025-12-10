@@ -712,8 +712,13 @@ def generate_press_review(
 
     return {
         "message": "Revue de presse générée",
-        "review": data
-    }
+        "review": {
+            "id": chat.id,
+            "title": data.get("title"),
+            "summary": data.get("summary"),
+            "articles": data.get("articles"),
+        }
+}
 
 # -------------------
 # Lancement du serveur
