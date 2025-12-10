@@ -340,17 +340,14 @@ def add_message_smart(
     L'agent détecte automatiquement toute demande de revue de presse et appelle le tool
     'advanced_search_news' si nécessaire. Version avec debug étendu et fallback direct.
     """
-    print("DEBUG: Entrée add_message_smart, payload =", payload)
     message_content = payload.get("message", "").strip()
     if not message_content:
         raise HTTPException(status_code=400, detail="Message requis")
-    print("DEBUG: message_content =", message_content)
 
     # --- Récupérer le chat ---
     chat = db.exec(select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
-    print("DEBUG: chat récupéré id =", getattr(chat, "id", None))
 
     messages = chat.messages or []
     messages.append({"role": "user", "content": message_content})
@@ -367,16 +364,13 @@ def add_message_smart(
         "liste d'articles avec titre et résumé, éventuellement le lien vers la source. "
         "Si aucun sujet n'est clairement demandé, pose une question polie pour clarifier le sujet."
     )
-    print("DEBUG: system_prompt_text (preview) =", system_prompt_text[:200])
 
     # --- Conversion conversation en texte brut pour l'agent ---
     raw_prompt = "\n".join([f"{m['role']}: {m['content']}" for m in [{"role": "system", "content": system_prompt_text}] + messages])
-    print("DEBUG: Raw prompt envoyé au LLM:", raw_prompt[:1000])
 
     # --- Détection simple d'intention 'revue de presse' et extraction du sujet ---
     lowered = message_content.lower()
     wants_review = bool(re.search(r"\b(revue de presse|revue|revue détaill|revue détaillée|revu[eé] de presse|détaill|détail)\b", lowered))
-    print("DEBUG: wants_review =", wants_review)
 
     topic = None
     if wants_review:
@@ -396,23 +390,19 @@ def add_message_smart(
         # final fallback: the entire user message
         if not topic or len(topic) < 3:
             topic = message_content
-    print("DEBUG: topic extrait =", topic)
 
     assistant_content = None
 
     # --- Si on détecte une demande de revue: appeler directement le tool (fallback fiable) ---
     if wants_review and topic:
-        print("DEBUG: Appel direct du tool advanced_search_news avec le topic:", topic)
         try:
             # Appel direct au tool Python (le decorator @agent.tool l'a juste enregistré, mais on peut l'appeler directement)
             # advanced_search_news prend (context, query, ...). Le context n'est pas nécessaire pour l'appel direct ici.
             tool_result = advanced_search_news(None, topic)
-            print("DEBUG: tool_result reçu (type):", type(tool_result))
 
             # Si le tool renvoie une erreur structurée
             if isinstance(tool_result, dict) and tool_result.get("error"):
                 assistant_content = f"⚠️ Le moteur de recherche d'articles a retourné une erreur : {tool_result.get('error')}"
-                print("ERROR: tool error:", tool_result.get("error"))
             else:
                 # Formatter la réponse: titre + synthèse + liste d'articles
                 articles = tool_result.get("articles", []) if isinstance(tool_result, dict) else []
@@ -436,7 +426,6 @@ def add_message_smart(
                     body_lines.append("")
 
                 assistant_content = "\n".join(body_lines)
-                print("DEBUG: assistant_content construit depuis tool (longueur):", len(assistant_content))
 
         except Exception as e_tool:
             print("ERROR: appel direct tool failed:", e_tool)
@@ -446,12 +435,8 @@ def add_message_smart(
             )
 
     else:
-        # --- Sinon, appeler l'agent normalement (SANS param tools=) ---
-        print("DEBUG: Appel agent.run_sync sans 'tools' (usage normal).")
         try:
-            # tu peux passer raw_prompt (string) ou une liste de messages selon l'API; on essaye raw_prompt d'abord
             result = agent.run_sync(user_prompt=raw_prompt, max_iterations=2)
-            print("DEBUG: result type:", type(result))
             # introspecter result pour debug
             try:
                 print("DEBUG: result dir():", dir(result)[:50])
@@ -464,10 +449,8 @@ def add_message_smart(
             else:
                 # agent.run_sync renvoie parfois un objet avec .data ou .output
                 assistant_content = getattr(result, "data", None) or getattr(result, "output", None) or str(result)
-            print("DEBUG: assistant_content (après agent) longueur:", len(assistant_content) if assistant_content else 0)
 
         except Exception as e_agent:
-            print("ERROR: appel LLM échoué:", e_agent)
             # fallback clair pour l'utilisateur
             assistant_content = (
                 "⚠️ Je n'ai pas pu traiter votre demande pour le moment, "
@@ -482,7 +465,6 @@ def add_message_smart(
         db.add(chat)
         db.commit()
         db.refresh(chat)
-        print("DEBUG: chat mis à jour en DB avec réponse assistant id =", chat.id)
     except Exception as e_db:
         db.rollback()
         print("ERROR DB lors de la sauvegarde du chat:", e_db)
@@ -692,11 +674,14 @@ def generate_press_review(
         # ========= Appel de l'agent =========
         result = press_review_agent.run_sync(
             user_prompt=prompt,
-            output_schema=PressReviewOutputModel  
+            output_type=PressReviewOutputModel 
         )
 
         # Gestion format résultat (selon version SDK)
         data = result.data if hasattr(result, "data") else result
+        
+        # Validation finale via Pydantic
+        review = PressReviewOutputModel(**data)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
