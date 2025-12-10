@@ -637,6 +637,7 @@ def advanced_search_news(context: RunContext, query: str, language: str = "fr", 
 # -------------------
 # Générer une revue de presse à partir du thème
 # -------------------
+# -------------------
 @app.post("/chats/{chat_id}/generate-press-review")
 def generate_press_review(
     chat_id: int,
@@ -664,8 +665,11 @@ def generate_press_review(
         [f"{m['role']}: {m['content']}" for m in chat.messages]
     )
 
-    # Appel au nouvel agent
+    # Appel au nouvel agent avec log complet
     try:
+        print("DEBUG: Prompt envoyé à l'agent:")
+        print(conversation_text[:1000])  # log uniquement les 1000 premiers caractères
+
         result = press_review_agent.run_sync(
             user_prompt=(
                 f"Génère une revue de presse sur le thème '{theme}'. "
@@ -675,27 +679,42 @@ def generate_press_review(
             output_type=PressReviewOutputModel
         )
 
-        data = result.data  # contient title / summary / articles
+        # Logs détaillés pour debug
+        print("DEBUG: type(result) =", type(result))
+        print("DEBUG: dir(result) =", dir(result))
+        print("DEBUG: result repr =", repr(result))
+
+        # Extraction prudente du data
+        data = getattr(result, "data", None) or getattr(result, "output", None) or result
+        print("DEBUG: data utilisé =", data)
+
+        if not data:
+            raise HTTPException(status_code=500, detail="L'agent n'a pas renvoyé de données valides.")
 
     except Exception as e:
+        print("ERROR: Exception lors de l'appel à l'agent:", str(e))
         raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
 
     # Sauvegarde dans le modèle Chat
-    chat.press_review_title = data.title
-    chat.press_review_summary = data.summary
-    chat.press_review_articles = data.articles
+    print("DEBUG: Sauvegarde en DB: title, summary, articles")
+    chat.press_review_title = getattr(data, "title", None)
+    chat.press_review_summary = getattr(data, "summary", None)
+    chat.press_review_articles = getattr(data, "articles", None)
     chat.updated_at = datetime.utcnow()
 
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
+    print("DEBUG: Revue générée avec succès, id chat =", chat.id)
     return {
         "message": "Revue de presse générée",
-        "review": data
+        "review": {
+            "title": getattr(data, "title", None),
+            "summary": getattr(data, "summary", None),
+            "articles": getattr(data, "articles", None),
+        }
     }
-
-
 
 # -------------------
 # Lancement du serveur
