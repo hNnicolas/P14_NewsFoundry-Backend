@@ -4,6 +4,7 @@ from sqlmodel import SQLModel, Field, Relationship, Column
 from sqlalchemy import JSON
 from sqlalchemy.ext.mutable import MutableList
 from datetime import datetime
+from pydantic import BaseModel
 
 # --------------------------
 # Modèle Utilisateur
@@ -37,14 +38,13 @@ class Chat(SQLModel, table=True):
     press_review_title: Optional[str] = None
     press_review_summary: Optional[str] = None
     press_review_articles: Optional[List[dict]] = Field(
-    default_factory=list,
-    sa_column=Column(MutableList.as_mutable(JSON))
-)
-
+        default_factory=list,
+        sa_column=Column(MutableList.as_mutable(JSON))
+    )
 
     # Relation avec l'utilisateur
     user: Optional[User] = Relationship(back_populates="chats")
-    
+
 # --------------------------
 # Modèle SystemPrompt
 # --------------------------
@@ -56,3 +56,16 @@ class SystemPrompt(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     prompt_text: str
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+# --------------------------
+# Modèles Pydantic pour la revue de presse (IA)
+# --------------------------
+class ArticleModel(BaseModel):
+    title: str
+    url: Optional[str] = None
+    summary: Optional[str] = None
+
+class PressReviewOutputModel(BaseModel):
+    title: str
+    summary: str
+    articles: List[ArticleModel]  # liste typée pour éviter l'erreur de schéma
