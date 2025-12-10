@@ -494,54 +494,6 @@ def add_message_smart(
         "user_prompt_received": message_content
     }
 
-
-# -------------------
-# Génération revue de presse détaillée
-# -------------------
-def generate_detailed_press_review(chat: Chat, db: Session, article_index: Optional[int] = None):
-    """
-    Utilise le SystemPrompt sauvegardé pour produire une revue de presse détaillée.
-    Si article_index est fourni (0-based), on demande le détail pour cet article.
-    """
-    system_prompt = db.exec(select(SystemPrompt)).first()
-    if not system_prompt or not system_prompt.prompt_text:
-        raise HTTPException(status_code=400, detail="Aucune actualité disponible pour générer la revue de presse.")
-
-    # Si l'utilisateur demande un article précis, on construit une instruction qui cible cet article.
-    if article_index is not None:
-        instruction = (
-            f"Donne le détail complet de l'article n°{article_index + 1} parmi les sujets listés "
-            "dans ce prompt (titre, résumé détaillé, source si disponible, et 3 points clés)."
-        )
-    else:
-        instruction = (
-            "Génère une revue de presse détaillée : pour chaque sujet listé dans le prompt, fournis "
-            "un titre, un court chapeau, puis 3 éléments clés et un lien ou source si disponible."
-        )
-
-    try:
-        result = agent.run_sync(
-            instruction,
-            system_prompt=system_prompt.prompt_text
-        )
-        detailed_review = getattr(result, "data", getattr(result, "output", str(result)))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
-
-    # Sauvegarde dans le chat 
-    chat.messages.append({"role": "assistant", "content": detailed_review})
-    chat.updated_at = datetime.utcnow()
-
-    db.add(chat)
-    db.commit()
-    db.refresh(chat)
-
-    return {
-        "assistant_response": detailed_review,
-        "messages": chat.messages
-    }
-
-
 # -------------------
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
 # -------------------
@@ -680,6 +632,67 @@ def advanced_search_news(context: RunContext, query: str, language: str = "fr", 
         "count": len(articles),
         "available": data.get("available", len(articles)),
         "articles": articles
+    }
+
+# -------------------
+# Générer une revue de presse à partir du thème
+# -------------------
+@app.post("/chats/{chat_id}/generate-press-review")
+def generate_press_review(
+    chat_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    theme = payload.get("theme")
+    if not theme:
+        raise HTTPException(status_code=400, detail="Un thème est requis pour générer la revue de presse.")
+
+    # Récupération du chat
+    chat = db.exec(
+        select(Chat).where(
+            (Chat.id == chat_id) &
+            (Chat.user_id == current_user.id)
+        )
+    ).first()
+
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat introuvable")
+
+    # Construction du contexte à partir de tout l'historique
+    conversation_text = "\n".join(
+        [f"{m['role']}: {m['content']}" for m in chat.messages]
+    )
+
+    # Appel au nouvel agent
+    try:
+        result = press_review_agent.run_sync(
+            user_prompt=(
+                f"Génère une revue de presse sur le thème '{theme}'. "
+                "Utilise uniquement les informations contenues dans cette conversation :\n\n"
+                f"{conversation_text}"
+            ),
+            output_model=PressReviewOutputModel
+        )
+
+        data = result.data  # contient title / summary / articles
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
+
+    # Sauvegarde dans le modèle Chat
+    chat.press_review_title = data.title
+    chat.press_review_summary = data.summary
+    chat.press_review_articles = data.articles
+    chat.updated_at = datetime.utcnow()
+
+    db.add(chat)
+    db.commit()
+    db.refresh(chat)
+
+    return {
+        "message": "Revue de presse générée",
+        "review": data
     }
 
 
