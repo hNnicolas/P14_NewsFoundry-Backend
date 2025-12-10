@@ -2,7 +2,7 @@ import re
 import unicodedata
 import requests
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Depends, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 from src.database import init_db, engine
@@ -639,9 +639,10 @@ def advanced_search_news(context: RunContext, query: str, language: str = "fr", 
 # Générer une revue de presse à partir du thème
 # -------------------
 # -------------------
+@app.post("/chats/{chat_id}/generate-press-review")
 def generate_press_review(
     chat_id: int,
-    payload: dict,
+    payload: dict = Body(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
