@@ -692,7 +692,7 @@ def generate_press_review(
         # ========= Appel de l'agent =========
         result = press_review_agent.run_sync(
             user_prompt=prompt,
-            output_schema=schema  # volontairement pour tester l'erreur exacte
+            output_schema=PressReviewOutputModel  
         )
 
         # Gestion format résultat (selon version SDK)
