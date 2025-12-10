@@ -672,7 +672,7 @@ def generate_press_review(
                 "Utilise uniquement les informations contenues dans cette conversation :\n\n"
                 f"{conversation_text}"
             ),
-            output_model=PressReviewOutputModel
+            output_type=PressReviewOutputModel
         )
 
         data = result.data  # contient title / summary / articles
