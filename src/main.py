@@ -647,49 +647,40 @@ def generate_press_review(
         [f"{m['role']}: {m['content']}" for m in chat.messages]
     )
 
-    # JSON Schema généré par Pydantic
-    schema = PressReviewOutputModel.schema()
+    # Prompt pour l'IA
+    prompt = (
+        f"Génère une revue de presse sur le thème '{theme}'. "
+        "Utilise uniquement les informations contenues dans cette conversation :\n\n"
+        f"{conversation_text}"
+    )
 
     try:
-        # ========= DEBUG : signature exacte =========
+        # DEBUG : signature exacte de run_sync
         print("\n================ RUN_SYNC SIGNATURE ================")
         try:
             print(inspect.signature(press_review_agent.run_sync))
         except Exception as sig_err:
             print("Impossible de lire la signature:", sig_err)
 
-        # ========= DEBUG : données envoyées =========
-        prompt = (
-            f"Génère une revue de presse sur le thème '{theme}'. "
-            "Utilise uniquement les informations contenues dans cette conversation :\n\n"
-            f"{conversation_text}"
-        )
-
-        print("\n================ PROMPT SENT ================")
-        print(prompt)
-
-        print("\n================ JSON SCHEMA KEYS ================")
-        print(list(schema.keys()))
-
-        # ========= Appel de l'agent =========
+        # Appel de l'agent avec output_type (pas output_schema)
         result = press_review_agent.run_sync(
             user_prompt=prompt,
-            output_type=PressReviewOutputModel 
+            output_type=PressReviewOutputModel
         )
 
-        # Gestion format résultat (selon version SDK)
+        # Gestion format résultat
         data = result.data if hasattr(result, "data") else result
-        
+
         # Validation finale via Pydantic
         review = PressReviewOutputModel(**data)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
 
-    # Sauvegarde BDD
-    chat.press_review_title = data.get("title")
-    chat.press_review_summary = data.get("summary")
-    chat.press_review_articles = data.get("articles")
+    # Sauvegarde dans la BDD
+    chat.press_review_title = review.title
+    chat.press_review_summary = review.summary
+    chat.press_review_articles = [article.dict() for article in review.articles]
     chat.updated_at = datetime.utcnow()
 
     db.add(chat)
@@ -700,11 +691,11 @@ def generate_press_review(
         "message": "Revue de presse générée",
         "review": {
             "id": chat.id,
-            "title": data.get("title"),
-            "summary": data.get("summary"),
-            "articles": data.get("articles"),
+            "title": review.title,
+            "summary": review.summary,
+            "articles": [article.dict() for article in review.articles],
         }
-}
+    }
 
 # -------------------
 # Lancement du serveur
