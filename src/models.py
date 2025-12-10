@@ -68,4 +68,4 @@ class ArticleModel(BaseModel):
 class PressReviewOutputModel(BaseModel):
     title: str
     summary: str
-    articles: List[ArticleModel]  # liste typée pour éviter l'erreur de schéma
+    articles: List[ArticleModel]
