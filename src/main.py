@@ -640,11 +640,11 @@ def advanced_search_news(context: RunContext, query: str, language: str = "fr", 
 # -------------------
 # -------------------
 @app.post("/chats/{chat_id}/generate-press-review")
-def generate_press_review(
+def generate_press_review_endpoint(
     chat_id: int,
-    payload: dict = Body(...),
+    payload: dict,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user = Depends(get_current_user)
 ):
     theme = payload.get("theme")
     if not theme:
@@ -652,8 +652,7 @@ def generate_press_review(
 
     chat = db.exec(
         select(Chat).where(
-            (Chat.id == chat_id) &
-            (Chat.user_id == current_user.id)
+            (Chat.id == chat_id) & (Chat.user_id == current_user.id)
         )
     ).first()
 
@@ -665,34 +664,28 @@ def generate_press_review(
         [f"{m['role']}: {m['content']}" for m in chat.messages]
     )
 
-    # JSON Schema généré par Pydantic
-    schema = PressReviewOutputModel.schema()
+    # ========= DEBUG : signature exacte =========
+    print("\n================ RUN_SYNC SIGNATURE ================")
+    try:
+        print(inspect.signature(press_review_agent.run_sync))
+    except Exception as sig_err:
+        print("Impossible de lire la signature:", sig_err)
+
+    # ========= DEBUG : données envoyées =========
+    prompt = (
+        f"Génère une revue de presse sur le thème '{theme}'. "
+        "Utilise uniquement les informations contenues dans cette conversation :\n\n"
+        f"{conversation_text}"
+    )
+
+    print("\n================ PROMPT SENT ================")
+    print(prompt)
 
     try:
-        # ========= DEBUG : signature exacte =========
-        print("\n================ RUN_SYNC SIGNATURE ================")
-        try:
-            print(inspect.signature(press_review_agent.run_sync))
-        except Exception as sig_err:
-            print("Impossible de lire la signature:", sig_err)
-
-        # ========= DEBUG : données envoyées =========
-        prompt = (
-            f"Génère une revue de presse sur le thème '{theme}'. "
-            "Utilise uniquement les informations contenues dans cette conversation :\n\n"
-            f"{conversation_text}"
-        )
-
-        print("\n================ PROMPT SENT ================")
-        print(prompt)
-
-        print("\n================ JSON SCHEMA KEYS ================")
-        print(list(schema.keys()))
-
-        # ========= Appel de l'agent =========
+        # ⚠️ Ici on passe le modèle Pydantic directement, PAS .schema()
         result = press_review_agent.run_sync(
             user_prompt=prompt,
-            output_schema=schema  # volontairement pour tester l'erreur exacte
+            output_schema=PressReviewOutputModel
         )
 
         # Gestion format résultat (selon version SDK)
@@ -719,7 +712,7 @@ def generate_press_review(
             "summary": data.get("summary"),
             "articles": data.get("articles"),
         }
-}
+    }
 
 # -------------------
 # Lancement du serveur
