@@ -15,6 +15,7 @@ import json
 from datetime import datetime
 from pydantic import BaseModel, Field  
 from pydantic_ai import Agent, RunContext, output
+import inspect
 
 # Charger dotenv uniquement si le fichier existe (local dev)
 if os.path.exists(".env"):
@@ -638,7 +639,6 @@ def advanced_search_news(context: RunContext, query: str, language: str = "fr", 
 # Générer une revue de presse à partir du thème
 # -------------------
 # -------------------
-@app.post("/chats/{chat_id}/generate-press-review")
 def generate_press_review(
     chat_id: int,
     payload: dict,
@@ -659,28 +659,48 @@ def generate_press_review(
     if not chat:
         raise HTTPException(status_code=404, detail="Chat introuvable")
 
+    # Reconstruction de la conversation
     conversation_text = "\n".join(
         [f"{m['role']}: {m['content']}" for m in chat.messages]
     )
 
-    # Conversion du modèle Pydantic en vrai JSON Schema
+    # JSON Schema généré par Pydantic
     schema = PressReviewOutputModel.schema()
 
     try:
-        result = press_review_agent.run_sync(
-            user_prompt=(
-                f"Génère une revue de presse sur le thème '{theme}'. "
-                "Utilise uniquement les informations contenues dans cette conversation :\n\n"
-                f"{conversation_text}"
-            ),
-            output_schema=schema
+        # ========= DEBUG : signature exacte =========
+        print("\n================ RUN_SYNC SIGNATURE ================")
+        try:
+            print(inspect.signature(press_review_agent.run_sync))
+        except Exception as sig_err:
+            print("Impossible de lire la signature:", sig_err)
+
+        # ========= DEBUG : données envoyées =========
+        prompt = (
+            f"Génère une revue de presse sur le thème '{theme}'. "
+            "Utilise uniquement les informations contenues dans cette conversation :\n\n"
+            f"{conversation_text}"
         )
 
+        print("\n================ PROMPT SENT ================")
+        print(prompt)
+
+        print("\n================ JSON SCHEMA KEYS ================")
+        print(list(schema.keys()))
+
+        # ========= Appel de l'agent =========
+        result = press_review_agent.run_sync(
+            user_prompt=prompt,
+            output_schema=schema  # volontairement pour tester l'erreur exacte
+        )
+
+        # Gestion format résultat (selon version SDK)
         data = result.data if hasattr(result, "data") else result
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
 
+    # Sauvegarde BDD
     chat.press_review_title = data.get("title")
     chat.press_review_summary = data.get("summary")
     chat.press_review_articles = data.get("articles")
@@ -694,7 +714,6 @@ def generate_press_review(
         "message": "Revue de presse générée",
         "review": data
     }
-
 
 # -------------------
 # Lancement du serveur
