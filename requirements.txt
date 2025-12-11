@@ -17,3 +17,10 @@ python-dotenv
 pydantic-ai
 httpx
 
+# --- RAG / LlamaIndex ---
+llama-index==0.10.68
+llama-index-core==0.10.68
+llama-index-readers-file
+llama-index-embeddings-openai
+llama-index-llms-openai
+llama-parse

@@ -28,7 +28,7 @@ class Chat(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    # Historique des messages suivi par SQLAlchemy
+    # Historique des messages
     messages: List[dict] = Field(
         default_factory=list,
         sa_column=Column(MutableList.as_mutable(JSON))
@@ -42,8 +42,15 @@ class Chat(SQLModel, table=True):
         sa_column=Column(MutableList.as_mutable(JSON))
     )
 
+    # URLs des articles chargés lors du chat
+    loaded_articles: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(MutableList.as_mutable(JSON))
+    )
+
     # Relation avec l'utilisateur
     user: Optional[User] = Relationship(back_populates="chats")
+
 
 # --------------------------
 # Modèle SystemPrompt

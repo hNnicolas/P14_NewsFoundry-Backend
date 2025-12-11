@@ -15,6 +15,10 @@ import json
 from datetime import datetime
 from pydantic import BaseModel, Field  
 from pydantic_ai import Agent, RunContext, output
+from llama_index.core import VectorStoreIndex, Document
+from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.llms.openai import OpenAI
+from llama_index.core.node_parser import SimpleNodeParser
 import inspect
 
 # Charger dotenv uniquement si le fichier existe (local dev)
@@ -620,7 +624,6 @@ def advanced_search_news(context: RunContext, query: str, language: str = "fr", 
 # -------------------
 # Générer une revue de presse à partir du thème
 # -------------------
-# -------------------
 @app.post("/chats/{chat_id}/generate-press-review")
 def generate_press_review(
     chat_id: int,
@@ -632,55 +635,94 @@ def generate_press_review(
     if not theme:
         raise HTTPException(status_code=400, detail="Un thème est requis pour générer la revue de presse.")
 
+    # --- Vérification du chat ---
     chat = db.exec(
         select(Chat).where(
-            (Chat.id == chat_id) &
-            (Chat.user_id == current_user.id)
+            (Chat.id == chat_id) & (Chat.user_id == current_user.id)
         )
     ).first()
 
     if not chat:
         raise HTTPException(status_code=404, detail="Chat introuvable")
 
-    # Reconstruction de la conversation
+    # ===================================
+    #      PHASE 1 : RAG - LOAD ARTICLES
+    # ===================================
+    article_urls = chat.loaded_articles or []
+
+    documents = []
+    for url in article_urls:
+        try:
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                documents.append(Document(text=resp.text, metadata={"url": url}))
+        except Exception:
+            pass  # on ignore les URLs cassées
+
+    # Si aucun article chargé → fallback sur comportement normal
+    rag_context = ""
+    if documents:
+        # --- create nodes ---
+        parser = SimpleNodeParser.from_defaults()
+        nodes = parser.get_nodes_from_documents(documents)
+
+        # --- create index ---
+        index = VectorStoreIndex.from_documents(
+            documents,
+            embed_model=OpenAIEmbedding(model="text-embedding-3-small")
+        )
+
+        # --- rechercher uniquement les documents pertinents ---
+        query_engine = index.as_query_engine()
+        rag_results = query_engine.query(f"Articles pertinents pour : {theme}")
+
+        # Texte consolidé
+        rag_context = f"\n\n=== ARTICLES RÉCUPÉRÉS VIA RAG ===\n{rag_results}\n\n"
+
+    # ===================================
+    #      PHASE 2 : RECONSTRUCTION DU CHAT
+    # ===================================
     conversation_text = "\n".join(
         [f"{m['role']}: {m['content']}" for m in chat.messages]
     )
 
-    # Prompt pour l'IA
+    # ===================================
+    #      PHASE 3 : PROMPT FINAL
+    # ===================================
     prompt = (
-        f"Génère une revue de presse sur le thème '{theme}'. "
-        "Utilise uniquement les informations contenues dans cette conversation :\n\n"
-        f"{conversation_text}"
+        f"Génère une revue de presse sur le thème '{theme}'.\n"
+        f"Analyse uniquement :\n"
+        f"- les messages de la conversation suivante,\n"
+        f"- les articles retrouvés via la RAG.\n\n"
+
+        f"=== CONVERSATION ===\n{conversation_text}\n\n"
+        f"{rag_context}"
     )
 
+    # ===================================
+    #      PHASE 4 : APPEL DU LLM
+    # ===================================
     try:
-        # DEBUG : signature exacte de run_sync
         print("\n================ RUN_SYNC SIGNATURE ================")
-        try:
-            print(inspect.signature(press_review_agent.run_sync))
-        except Exception as sig_err:
-            print("Impossible de lire la signature:", sig_err)
+        print(inspect.signature(press_review_agent.run_sync))
 
-        # Appel de l'agent avec output_type (pas output_schema)
         result = press_review_agent.run_sync(
             user_prompt=prompt,
             output_type=PressReviewOutputModel
         )
 
-        # Gestion format résultat
         data = result.data if hasattr(result, "data") else result
-
-        # Validation finale via Pydantic
         review = PressReviewOutputModel(**data)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
 
-    # Sauvegarde dans la BDD
+    # ===================================
+    #      PHASE 5 : SAUVEGARDE BDD
+    # ===================================
     chat.press_review_title = review.title
     chat.press_review_summary = review.summary
-    chat.press_review_articles = [article.dict() for article in review.articles]
+    chat.press_review_articles = [a.dict() for a in review.articles]
     chat.updated_at = datetime.utcnow()
 
     db.add(chat)
@@ -689,12 +731,7 @@ def generate_press_review(
 
     return {
         "message": "Revue de presse générée",
-        "review": {
-            "id": chat.id,
-            "title": review.title,
-            "summary": review.summary,
-            "articles": [article.dict() for article in review.articles],
-        }
+        "review": review.dict()
     }
 
 # -------------------
