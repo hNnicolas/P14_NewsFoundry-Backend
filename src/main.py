@@ -620,6 +620,48 @@ def advanced_search_news(context: RunContext, query: str, language: str = "fr", 
         "available": data.get("available", len(articles)),
         "articles": articles
     }
+    
+# -------------------
+# Tool : final_result (résultat structuré pour la revue de presse)
+# -------------------
+@agent.tool
+def final_result(context: RunContext, title: str, summary: str, articles: list) -> dict:
+    """
+    Tool permettant à l’agent de renvoyer une revue de presse structurée.
+    """
+    return {
+        "title": title,
+        "summary": summary,
+        "articles": articles
+    }
+
+# IMPORTANT : fournir un JSON Schema valide à OpenAI
+final_result.__doc__ = """
+{
+    "name": "final_result",
+    "description": "Retour structuré de la revue de presse",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "title": { "type": "string" },
+            "summary": { "type": "string" },
+            "articles": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string" },
+                        "summary": { "type": "string" },
+                        "url": { "type": "string" }
+                    },
+                    "required": ["title"]
+                }
+            }
+        },
+        "required": ["title", "summary", "articles"]
+    }
+}
+"""
 
 # -------------------
 # Générer une revue de presse à partir du thème
@@ -645,84 +687,78 @@ def generate_press_review(
     if not chat:
         raise HTTPException(status_code=404, detail="Chat introuvable")
 
-    # ===================================
-    #      PHASE 1 : RAG - LOAD ARTICLES
-    # ===================================
-    article_urls = chat.loaded_articles or []
 
+    # ====================================================
+    # PHASE 1 : RAG (Chargement articles + extraction)
+    # ====================================================
+    article_urls = chat.loaded_articles or []
     documents = []
+
     for url in article_urls:
         try:
             resp = requests.get(url, timeout=5)
             if resp.status_code == 200:
                 documents.append(Document(text=resp.text, metadata={"url": url}))
-        except Exception:
-            pass  # on ignore les URLs cassées
+        except:
+            pass
 
-    # Si aucun article chargé → fallback sur comportement normal
     rag_context = ""
     if documents:
-        # --- create nodes ---
         parser = SimpleNodeParser.from_defaults()
         nodes = parser.get_nodes_from_documents(documents)
 
-        # --- create index ---
         index = VectorStoreIndex.from_documents(
             documents,
             embed_model=OpenAIEmbedding(model="text-embedding-3-small")
         )
 
-        # --- rechercher uniquement les documents pertinents ---
-        query_engine = index.as_query_engine()
-        rag_results = query_engine.query(f"Articles pertinents pour : {theme}")
-
-        # Texte consolidé
+        rag_results = index.as_query_engine().query(f"Articles pertinents pour : {theme}")
         rag_context = f"\n\n=== ARTICLES RÉCUPÉRÉS VIA RAG ===\n{rag_results}\n\n"
 
-    # ===================================
-    #      PHASE 2 : RECONSTRUCTION DU CHAT
-    # ===================================
+
+    # ====================================================
+    # PHASE 2 : Reconstruction du chat
+    # ====================================================
     conversation_text = "\n".join(
         [f"{m['role']}: {m['content']}" for m in chat.messages]
     )
 
-    # ===================================
-    #      PHASE 3 : PROMPT FINAL
-    # ===================================
-    prompt = (
-        f"Génère une revue de presse sur le thème '{theme}'.\n"
-        f"Analyse uniquement :\n"
-        f"- les messages de la conversation suivante,\n"
-        f"- les articles retrouvés via la RAG.\n\n"
 
+    # ====================================================
+    # PHASE 3 : Prompt final à envoyer au LLM
+    # ====================================================
+    prompt = (
+        f"Génère une revue de presse journalistique sur le thème '{theme}'.\n"
+        f"Analyse uniquement :\n"
+        f"- la conversation ci-dessous,\n"
+        f"- les articles retrouvés via la RAG.\n\n"
         f"=== CONVERSATION ===\n{conversation_text}\n\n"
         f"{rag_context}"
     )
 
-    # ===================================
-    #      PHASE 4 : APPEL DU LLM
-    # ===================================
-    try:
-        print("\n================ RUN_SYNC SIGNATURE ================")
-        print(inspect.signature(press_review_agent.run_sync))
 
+    # ====================================================
+    # PHASE 4 : Appel LLM — utilisation obligatoire du tool final_result
+    # ====================================================
+    try:
         result = press_review_agent.run_sync(
             user_prompt=prompt,
-            output_type=PressReviewOutputModel
+            tool_choice="final_result"   
         )
 
-        data = result.data if hasattr(result, "data") else result
-        review = PressReviewOutputModel(**data)
+        tool_call = result.data["tool_calls"][0]
+        review = tool_call["arguments"]
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: " + str(e))
 
-    # ===================================
-    #      PHASE 5 : SAUVEGARDE BDD
-    # ===================================
-    chat.press_review_title = review.title
-    chat.press_review_summary = review.summary
-    chat.press_review_articles = [a.dict() for a in review.articles]
+
+    # ====================================================
+    # PHASE 5 : Sauvegarde en BDD
+    # ====================================================
+    chat.press_review_title = review["title"]
+    chat.press_review_summary = review["summary"]
+    chat.press_review_articles = review["articles"]
     chat.updated_at = datetime.utcnow()
 
     db.add(chat)
@@ -731,8 +767,9 @@ def generate_press_review(
 
     return {
         "message": "Revue de presse générée",
-        "review": review.dict()
+        "review": review
     }
+
 
 # -------------------
 # Lancement du serveur
