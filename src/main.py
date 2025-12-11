@@ -649,33 +649,36 @@ def final_result(context: RunContext, title: str, summary: str, articles: list) 
         "articles": articles
     }
 
-# IMPORTANT : fournir un JSON Schema valide
+# JSON Schema corrigé
 final_result.__doc__ = """
 {
-    "name": "final_result",
-    "description": "Retour structuré de la revue de presse",
-    "parameters": {
-        "type": "object",
-        "properties": {
+  "name": "final_result",
+  "description": "Retour structuré de la revue de presse",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "title": { "type": "string" },
+      "summary": { "type": "string" },
+      "articles": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
             "title": { "type": "string" },
             "summary": { "type": "string" },
-            "articles": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "title": { "type": "string" },
-                        "summary": { "type": "string" },
-                        "url": { "type": "string" }
-                    },
-                    "required": ["title", "summary", "url"]
-                }
-            }
-        },
-        "required": ["title", "summary", "articles"]
-    }
+            "url": { "type": "string" }
+          },
+          "required": ["title", "summary", "url"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["title", "summary", "articles"],
+    "additionalProperties": false
+  }
 }
 """
+
 
 # -------------------
 # Générer une revue de presse à partir du thème
