@@ -636,36 +636,30 @@ def advanced_search_news(context: RunContext, query: str, language: str = "fr", 
     }
     
 # -------------------
-# Tool : final_result 
+# Tool : final_result
 # -------------------
 @agent.tool
 def final_result(context: RunContext, title: str, summary: str, articles: list) -> dict:
     """
-    Retourne la revue de presse structurée avec debug live.
+    Retourne la revue de presse structurée avec debug.
     """
-    print("[final_result] === Début debug ===")
-    print("[final_result] title type:", type(title), "value:", repr(title))
-    print("[final_result] summary type:", type(summary), "value:", repr(summary))
-    print("[final_result] articles type:", type(articles), "value:", repr(articles))
+    print("[final_result] START DEBUG")
+    print(" title:", repr(title), type(title))
+    print(" summary:", repr(summary), type(summary))
+    print(" articles:", repr(articles), type(articles))
 
-    if articles:
+    if isinstance(articles, list):
         for i, a in enumerate(articles):
-            if not isinstance(a, dict):
-                print(f"[final_result][WARNING] article {i} n'est pas un dict ! type={type(a)} value={a}")
-            else:
-                print(f"[final_result] article {i} keys:", a.keys())
-                for field in ["title", "summary", "url"]:
-                    if field not in a:
-                        print(f"[final_result][WARNING] article {i} missing field: {field}")
+            print(f"  article[{i}]:", a, type(a))
 
-    print("[final_result] === Fin debug ===\n")
+    print("[final_result] END DEBUG")
     return {
         "title": title,
         "summary": summary,
         "articles": articles
     }
 
-# JSON Schema GPT function calling corrigé
+# === JSON Schema STRICTEMENT VALIDE ===
 final_result.__doc__ = """
 {
   "name": "final_result",
@@ -673,8 +667,12 @@ final_result.__doc__ = """
   "parameters": {
     "type": "object",
     "properties": {
-      "title": { "type": "string" },
-      "summary": { "type": "string" },
+      "title": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      },
       "articles": {
         "type": "array",
         "items": {
@@ -684,15 +682,16 @@ final_result.__doc__ = """
             "summary": { "type": "string" },
             "url": { "type": "string" }
           },
-          "required": ["title", "summary", "url"]
+          "required": ["title", "summary", "url"],
+          "additionalProperties": false
         }
       }
     },
-    "required": ["title", "summary", "articles"]
+    "required": ["title", "summary", "articles"],
+    "additionalProperties": false
   }
 }
 """
-
 
 # -------------------
 # Générer une revue de presse à partir du thème
