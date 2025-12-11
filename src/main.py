@@ -667,7 +667,7 @@ def final_result(context: RunContext, title: str, summary: str, articles: list) 
         "articles": articles
     }
 
-# JSON Schema GPT function calling corrigé
+# JSON Schema GPT function calling 
 final_result.__doc__ = """
 {
   "name": "final_result",
@@ -802,6 +802,7 @@ def generate_press_review(
         "message": "Revue de presse générée",
         "review": review
     }
+    
 # -------------------
 # Lancement du serveur
 # -------------------
