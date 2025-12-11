@@ -627,7 +627,7 @@ def advanced_search_news(context: RunContext, query: str, language: str = "fr", 
 @agent.tool
 def final_result(context: RunContext, title: str, summary: str, articles: list) -> dict:
     """
-    Tool permettant à l’agent de renvoyer une revue de presse structurée.
+    Retourne la revue de presse structurée.
     """
     return {
         "title": title,
@@ -635,7 +635,7 @@ def final_result(context: RunContext, title: str, summary: str, articles: list) 
         "articles": articles
     }
 
-# IMPORTANT : fournir un JSON Schema valide à OpenAI
+# IMPORTANT : fournir un JSON Schema valide
 final_result.__doc__ = """
 {
     "name": "final_result",
@@ -689,7 +689,7 @@ def generate_press_review(
 
 
     # ====================================================
-    # PHASE 1 : RAG (Chargement articles + extraction)
+    # PHASE 1 : RAG articles chargés
     # ====================================================
     article_urls = chat.loaded_articles or []
     documents = []
@@ -725,36 +725,35 @@ def generate_press_review(
 
 
     # ====================================================
-    # PHASE 3 : Prompt final à envoyer au LLM
+    # PHASE 3 : Prompt final pour l’agent
     # ====================================================
     prompt = (
-        f"Génère une revue de presse journalistique sur le thème '{theme}'.\n"
-        f"Analyse uniquement :\n"
-        f"- la conversation ci-dessous,\n"
-        f"- les articles retrouvés via la RAG.\n\n"
+        f"Génère une revue de presse complète sur le thème '{theme}'.\n"
+        f"Utilise OBLIGATOIREMENT le tool final_result pour renvoyer le résultat.\n\n"
         f"=== CONVERSATION ===\n{conversation_text}\n\n"
         f"{rag_context}"
     )
 
 
     # ====================================================
-    # PHASE 4 : Appel LLM — utilisation obligatoire du tool final_result
+    # PHASE 4 : Appel LLM → l’agent va appeler final_result()
     # ====================================================
     try:
         result = press_review_agent.run_sync(
             user_prompt=prompt,
-            tool_choice="final_result"   
+            output_type=PressReviewOutputModel
         )
 
+        # --- Extraction correcte du tool_call ---
         tool_call = result.data["tool_calls"][0]
         review = tool_call["arguments"]
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: " + str(e))
+        raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
 
 
     # ====================================================
-    # PHASE 5 : Sauvegarde en BDD
+    # PHASE 5 : Sauvegarde BDD
     # ====================================================
     chat.press_review_title = review["title"]
     chat.press_review_summary = review["summary"]
