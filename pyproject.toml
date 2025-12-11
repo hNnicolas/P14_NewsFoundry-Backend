@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
+
 dependencies = [
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
@@ -14,9 +15,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic-ai>=1.24.0",
     "httpx>=0.24.0",
+
+    # --- LlamaIndex ---
     "llama-index-core>=0.11.0",
     "llama-index-readers-file>=0.2.0",
     "llama-index-embeddings-openai>=0.2.0",
     "llama-index-llms-openai>=0.2.0",
-    "llama-parse>=0.4.0
+    "llama-parse>=0.4.0"
 ]
