@@ -723,6 +723,26 @@ def generate_press_review(
             user_prompt=prompt,
             output_type=PressReviewOutputModel
         )
+        
+        print("\n[generate_press_review] === RAW RESULT OBJECT ===")
+        print(result)
+        print("\n[generate_press_review] === RESULT.__DICT__ ===")
+        try:
+            print(json.dumps(result.__dict__, indent=2, default=str))
+        except:
+            print(result.__dict__)
+        print("\n[generate_press_review] === RAW result.data ===")
+        try:
+            print(json.dumps(result.data, indent=2, default=str))
+        except:
+            print(result.data)
+        
+        print("\n[generate_press_review] === RAW result.data['tool_calls'] ===")
+        try:
+            print(json.dumps(result.data.get('tool_calls'), indent=2, default=str))
+        except:
+            print(result.data.get('tool_calls'))
+            
         tool_call = result.data["tool_calls"][0]
         review = tool_call["arguments"]
 
