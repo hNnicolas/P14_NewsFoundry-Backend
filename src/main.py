@@ -583,83 +583,38 @@ def get_top_news(
     }
     
 # -------------------
-# Tool : recherche avancée d’articles 
-# -------------------
-@agent.tool
-def advanced_search_news(context: RunContext, query: str, language: str = "fr", number: int = 10) -> dict:
-    if not WORLD_NEWS_API_KEY:
-        return {"error": "Clé API World News manquante."}
-
-    if not query or len(query.strip()) < 3:
-        return {"error": "La requête doit contenir au moins 3 caractères."}
-
-    try:
-        response = requests.get(
-            "https://api.worldnewsapi.com/search-news",
-            headers={"x-api-key": WORLD_NEWS_API_KEY},
-            params={
-                "text": query,
-                "language": language,
-                "number": number,
-                "sort": "publish-time",
-                "sort-direction": "DESC"
-            },
-            timeout=10
-        )
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        return {"error": f"Erreur API World News : {str(e)}"}
-
-    articles = []
-    for n in data.get("news", []):
-        articles.append({
-            "title": n.get("title"),
-            "summary": n.get("summary"),
-            "content": n.get("text"),
-            "url": n.get("url"),
-            "image": n.get("image"),
-            "video": n.get("video"),
-            "publish_date": n.get("publish_date"),
-            "authors": n.get("authors", []),
-            "category": n.get("category"),
-            "language": n.get("language"),
-            "source_country": n.get("source_country"),
-            "sentiment": n.get("sentiment")
-        })
-
-    return {
-        "query": query,
-        "count": len(articles),
-        "available": data.get("available", len(articles)),
-        "articles": articles
-    }
-    
-# -------------------
 # Tool : final_result
 # -------------------
 @agent.tool
 def final_result(context: RunContext, title: str, summary: str, articles: list) -> dict:
     """
-    Retourne la revue de presse structurée avec debug.
+    Retourne la revue de presse structurée avec debug live.
     """
-    print("[final_result] START DEBUG")
-    print(" title:", repr(title), type(title))
-    print(" summary:", repr(summary), type(summary))
-    print(" articles:", repr(articles), type(articles))
 
-    if isinstance(articles, list):
+    print("[final_result] === Début debug final_result ===")
+    print("[final_result] title:", repr(title))
+    print("[final_result] summary:", repr(summary))
+    print("[final_result] articles:", repr(articles))
+
+    if articles:
         for i, a in enumerate(articles):
-            print(f"  article[{i}]:", a, type(a))
+            if not isinstance(a, dict):
+                print(f"[WARNING] article {i} is not a dict:", type(a))
+            else:
+                for field in ["title", "summary", "url"]:
+                    if field not in a:
+                        print(f"[WARNING] article {i} missing field:", field)
 
-    print("[final_result] END DEBUG")
+    print("[final_result] === Fin debug final_result ===\n")
+
     return {
         "title": title,
         "summary": summary,
         "articles": articles
     }
 
-# === JSON Schema STRICTEMENT VALIDE ===
+
+# === JSON Schema GPT FUNCTION CALLING ===
 final_result.__doc__ = """
 {
   "name": "final_result",
@@ -667,12 +622,8 @@ final_result.__doc__ = """
   "parameters": {
     "type": "object",
     "properties": {
-      "title": {
-        "type": "string"
-      },
-      "summary": {
-        "type": "string"
-      },
+      "title": { "type": "string" },
+      "summary": { "type": "string" },
       "articles": {
         "type": "array",
         "items": {
@@ -692,6 +643,7 @@ final_result.__doc__ = """
   }
 }
 """
+
 
 # -------------------
 # Générer une revue de presse à partir du thème
