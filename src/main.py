@@ -668,7 +668,7 @@ final_result.__doc__ = """
                         "summary": { "type": "string" },
                         "url": { "type": "string" }
                     },
-                    "required": ["title"]
+                    "required": ["title", "summary", "url"]
                 }
             }
         },
