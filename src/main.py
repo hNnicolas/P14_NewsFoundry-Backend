@@ -643,8 +643,7 @@ def final_result(context: RunContext, title: str, summary: str, articles: list) 
     """
     Retourne la revue de presse structurée avec debug live.
     """
-    # === LOGGING DÉTAILLÉ ===
-    print("[final_result] === Début debug final_result ===")
+    print("[final_result] === Début debug ===")
     print("[final_result] title type:", type(title), "value:", repr(title))
     print("[final_result] summary type:", type(summary), "value:", repr(summary))
     print("[final_result] articles type:", type(articles), "value:", repr(articles))
@@ -655,19 +654,18 @@ def final_result(context: RunContext, title: str, summary: str, articles: list) 
                 print(f"[final_result][WARNING] article {i} n'est pas un dict ! type={type(a)} value={a}")
             else:
                 print(f"[final_result] article {i} keys:", a.keys())
-                print(f"[final_result] article {i} types:", {k: type(v) for k, v in a.items()})
                 for field in ["title", "summary", "url"]:
                     if field not in a:
                         print(f"[final_result][WARNING] article {i} missing field: {field}")
 
-    print("[final_result] === Fin debug final_result ===\n")
+    print("[final_result] === Fin debug ===\n")
     return {
         "title": title,
         "summary": summary,
         "articles": articles
     }
 
-# JSON Schema GPT function calling 
+# JSON Schema GPT function calling corrigé
 final_result.__doc__ = """
 {
   "name": "final_result",
@@ -686,13 +684,11 @@ final_result.__doc__ = """
             "summary": { "type": "string" },
             "url": { "type": "string" }
           },
-          "required": ["title", "summary", "url"],
-          "additionalProperties": false
+          "required": ["title", "summary", "url"]
         }
       }
     },
-    "required": ["title", "summary", "articles"],
-    "additionalProperties": false
+    "required": ["title", "summary", "articles"]
   }
 }
 """
