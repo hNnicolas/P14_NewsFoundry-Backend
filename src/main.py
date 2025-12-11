@@ -2,7 +2,7 @@ import re
 import unicodedata
 import requests
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Depends, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 from src.database import init_db, engine
@@ -485,11 +485,22 @@ def add_message_smart(
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
 # -------------------
 
-@app.get("/top-news")
-def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+
+@app.post("/top-news")
+def get_top_news(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
 
+    # --- Récupérer le message de l'utilisateur depuis le body ---
+    user_message_content = payload.get("user_message", "").strip()
+    if not user_message_content:
+        raise HTTPException(status_code=400, detail="Aucun message utilisateur fourni")
+
+    # --- Paramètres API World News ---
     params = {
         "source-country": "fr",
         "language": "fr",
@@ -498,6 +509,7 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
         "max-news-per-cluster": 1
     }
 
+    # --- Requête API World News ---
     try:
         response = requests.get(
             WORLD_NEWS_URL,
@@ -525,11 +537,9 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
 
-    # --- Créer le message structuré pour l'assistant ---
+    # --- Construire le message assistant ---
     top_title = articles[0]["title"] if articles else "Actualités"
-    top_articles_list = "\n".join(
-        [f"- {a['title']}" for a in articles[:3]]
-    )
+    top_articles_list = "\n".join([f"- {a['title']}" for a in articles[:3]])
     assistant_message = (
         f"Voici un résumé des dernières {top_title} :\n\n"
         f"{top_articles_list}\n\n"
@@ -537,7 +547,7 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
     )
 
     # --- Mettre à jour le SystemPrompt ---
-    system_prompt_text = assistant_message 
+    system_prompt_text = assistant_message
     now = datetime.utcnow()
     system_prompt = db.exec(select(SystemPrompt)).first()
     if system_prompt:
@@ -554,17 +564,21 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
         select(Chat).where(Chat.user_id == current_user.id).order_by(Chat.updated_at.desc())
     ).first()
     if chat:
+        chat.messages.append({"role": "user", "content": user_message_content})
         chat.messages.append({"role": "assistant", "content": assistant_message})
         chat.updated_at = now
         db.add(chat)
         db.commit()
         db.refresh(chat)
 
+    # --- Retour JSON ---
     return {
         "message": "Actualités mises à jour et ajoutées dans le chat",
+        "user_message": user_message_content,
         "assistant_message": assistant_message,
         "system_prompt_preview": system_prompt_text,
         "chat_id": chat.id if chat else None,
+        "chat_messages": chat.messages if chat else [],
         "updated_at": now.isoformat()
     }
     
