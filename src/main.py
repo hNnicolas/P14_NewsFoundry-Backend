@@ -636,27 +636,41 @@ def advanced_search_news(context: RunContext, query: str, language: str = "fr", 
     }
     
 # -------------------
-# Tool : final_result (résultat structuré pour la revue de presse)
+# Tool : final_result (résultat structuré pour la revue de presse) avec debug
 # -------------------
 @agent.tool
 def final_result(context: RunContext, title: str, summary: str, articles: list) -> dict:
     """
-    Retourne la revue de presse structurée.
+    Retourne la revue de presse structurée avec debug live.
     """
-    # Log pour vérifier exactement ce qu'on envoie
-    print("[final_result] title type:", type(title))
-    print("[final_result] summary type:", type(summary))
-    print("[final_result] articles type:", type(articles))
+    # === LOGGING DÉTAILLÉ ===
+    print("[final_result] === Début debug final_result ===")
+    print("[final_result] title type:", type(title), "value:", repr(title))
+    print("[final_result] summary type:", type(summary), "value:", repr(summary))
+    print("[final_result] articles type:", type(articles), "value:", repr(articles))
+
     if articles:
         for i, a in enumerate(articles):
-            print(f"[final_result] article {i} keys:", a.keys(), "types:", {k: type(v) for k, v in a.items()})
+            if not isinstance(a, dict):
+                print(f"[final_result][WARNING] article {i} n'est pas un dict ! type={type(a)} value={a}")
+            else:
+                print(f"[final_result] article {i} keys:", a.keys())
+                print(f"[final_result] article {i} types:", {k: type(v) for k, v in a.items()})
+                # Vérification des champs obligatoires
+                for field in ["title", "summary", "url"]:
+                    if field not in a:
+                        print(f"[final_result][WARNING] article {i} missing field: {field}")
+
+    print("[final_result] === Fin debug final_result ===\n")
+
+    # Retour final
     return {
         "title": title,
         "summary": summary,
         "articles": articles
     }
 
-# JSON Schema compatible GPT function calling
+# === JSON Schema GPT function calling compatible ===
 final_result.__doc__ = """
 {
   "name": "final_result",
@@ -676,12 +690,37 @@ final_result.__doc__ = """
             "url": { "type": "string" }
           },
           "required": ["title", "summary", "url"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "examples": [
+            {
+              "title": "Exemple de titre",
+              "summary": "Exemple de résumé",
+              "url": "https://exemple.com/article"
+            }
+          ]
         }
       }
     },
     "required": ["title", "summary", "articles"],
-    "additionalProperties": false
+    "additionalProperties": false,
+    "examples": [
+      {
+        "title": "Revue de presse Exemple",
+        "summary": "Résumé global de la revue de presse",
+        "articles": [
+          {
+            "title": "Titre article 1",
+            "summary": "Résumé article 1",
+            "url": "https://exemple.com/article1"
+          },
+          {
+            "title": "Titre article 2",
+            "summary": "Résumé article 2",
+            "url": "https://exemple.com/article2"
+          }
+        ]
+      }
+    ]
   }
 }
 """
