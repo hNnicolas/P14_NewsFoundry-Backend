@@ -643,13 +643,20 @@ def final_result(context: RunContext, title: str, summary: str, articles: list) 
     """
     Retourne la revue de presse structurée.
     """
+    # Log pour vérifier exactement ce qu'on envoie
+    print("[final_result] title type:", type(title))
+    print("[final_result] summary type:", type(summary))
+    print("[final_result] articles type:", type(articles))
+    if articles:
+        for i, a in enumerate(articles):
+            print(f"[final_result] article {i} keys:", a.keys(), "types:", {k: type(v) for k, v in a.items()})
     return {
         "title": title,
         "summary": summary,
         "articles": articles
     }
 
-# JSON Schema corrigé
+# JSON Schema compatible GPT function calling
 final_result.__doc__ = """
 {
   "name": "final_result",
@@ -668,13 +675,11 @@ final_result.__doc__ = """
             "summary": { "type": "string" },
             "url": { "type": "string" }
           },
-          "required": ["title", "summary", "url"],
-          "additionalProperties": false
+          "required": ["title", "summary", "url"]
         }
       }
     },
-    "required": ["title", "summary", "articles"],
-    "additionalProperties": false
+    "required": ["title", "summary", "articles"]
   }
 }
 """
