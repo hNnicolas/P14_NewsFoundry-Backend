@@ -751,7 +751,19 @@ def generate_press_review(
         print(review)
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
+        print("\n[generate_press_review] === ERREUR CRITIQUE ===")
+        print("Type :", type(e))
+        print("Message :", str(e))
+        print("-------- TRACEBACK COMPLET --------")
+        import traceback
+        traceback.print_exc()
+        print("-----------------------------------\n")
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur IA lors de la revue de presse: {str(e)}"
+        )
+
 
     # --------------------------------------------------
     # PHASE 5 : Sauvegarde BDD
