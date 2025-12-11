@@ -490,6 +490,10 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API World News non configurée")
 
+    # --- Message utilisateur simulé ---
+    user_message_content = "Montre-moi les actualités les plus importantes aujourd'hui"
+    
+    # --- Extraire les top news via API ---
     params = {
         "source-country": "fr",
         "language": "fr",
@@ -525,35 +529,36 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
 
-    # --- Créer le message structuré pour l'assistant ---
+    # --- Générer message assistant ---
     top_title = articles[0]["title"] if articles else "Actualités"
-    top_articles_list = "\n".join(
-        [f"- {a['title']}" for a in articles[:3]]
-    )
+    top_articles_list = "\n".join([f"- {a['title']}" for a in articles[:3]])
     assistant_message = (
         f"Voici un résumé des dernières {top_title} :\n\n"
         f"{top_articles_list}\n\n"
         "Souhaitez-vous que je génère une revue de presse détaillée sur l'un de ces sujets ?"
     )
 
-    # --- Mettre à jour le SystemPrompt ---
-    system_prompt_text = assistant_message 
     now = datetime.utcnow()
+
+    # --- Mettre à jour le SystemPrompt ---
     system_prompt = db.exec(select(SystemPrompt)).first()
     if system_prompt:
-        system_prompt.prompt_text = system_prompt_text
+        system_prompt.prompt_text = assistant_message
         system_prompt.updated_at = now
     else:
-        system_prompt = SystemPrompt(prompt_text=system_prompt_text, updated_at=now)
+        system_prompt = SystemPrompt(prompt_text=assistant_message, updated_at=now)
         db.add(system_prompt)
     db.commit()
     db.refresh(system_prompt)
 
-    # --- Ajouter le message dans le chat ---
+    # --- Ajouter le chat --- 
     chat = db.exec(
         select(Chat).where(Chat.user_id == current_user.id).order_by(Chat.updated_at.desc())
     ).first()
     if chat:
+        # Ajouter le message "user"
+        chat.messages.append({"role": "user", "content": user_message_content})
+        # Ajouter le message "assistant"
         chat.messages.append({"role": "assistant", "content": assistant_message})
         chat.updated_at = now
         db.add(chat)
@@ -562,11 +567,13 @@ def get_top_news(db: Session = Depends(get_db), current_user: User = Depends(get
 
     return {
         "message": "Actualités mises à jour et ajoutées dans le chat",
+        "user_message": user_message_content,
         "assistant_message": assistant_message,
-        "system_prompt_preview": system_prompt_text,
+        "system_prompt_preview": assistant_message,
         "chat_id": chat.id if chat else None,
         "updated_at": now.isoformat()
     }
+
     
 # -------------------
 # Tool : recherche avancée d’articles 
@@ -741,7 +748,8 @@ def generate_press_review(
     try:
         result = press_review_agent.run_sync(
             user_prompt=prompt,
-            output_type=PressReviewOutputModel
+            output_type=PressReviewOutputModel,
+            max_output_tokens=500
         )
 
         # --- Extraction correcte du tool_call ---
