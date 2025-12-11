@@ -755,8 +755,7 @@ def generate_press_review(
     try:
         result = press_review_agent.run_sync(
             user_prompt=prompt,
-            output_type=PressReviewOutputModel,
-            max_output_tokens=500
+            output_type=PressReviewOutputModel
         )
 
         # --- Extraction correcte du tool_call ---
