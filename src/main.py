@@ -675,14 +675,17 @@ final_result.__doc__ = """
             "summary": { "type": "string" },
             "url": { "type": "string" }
           },
-          "required": ["title", "summary", "url"]
+          "required": ["title", "summary", "url"],
+          "additionalProperties": false
         }
       }
     },
-    "required": ["title", "summary", "articles"]
+    "required": ["title", "summary", "articles"],
+    "additionalProperties": false
   }
 }
 """
+
 
 
 # -------------------
@@ -699,20 +702,18 @@ def generate_press_review(
     if not theme:
         raise HTTPException(status_code=400, detail="Un thème est requis pour générer la revue de presse.")
 
-    # --- Vérification du chat ---
+    # Vérification du chat
     chat = db.exec(
         select(Chat).where(
             (Chat.id == chat_id) & (Chat.user_id == current_user.id)
         )
     ).first()
-
     if not chat:
         raise HTTPException(status_code=404, detail="Chat introuvable")
 
-
-    # ====================================================
-    # PHASE 1 : RAG articles chargés
-    # ====================================================
+    # --------------------------------------------------
+    # PHASE 1 : RAG articles
+    # --------------------------------------------------
     article_urls = chat.loaded_articles or []
     documents = []
 
@@ -721,34 +722,28 @@ def generate_press_review(
             resp = requests.get(url, timeout=5)
             if resp.status_code == 200:
                 documents.append(Document(text=resp.text, metadata={"url": url}))
-        except:
-            pass
+        except Exception as e:
+            print(f"[generate_press_review] erreur récupération URL {url}: {e}")
 
     rag_context = ""
     if documents:
         parser = SimpleNodeParser.from_defaults()
         nodes = parser.get_nodes_from_documents(documents)
-
         index = VectorStoreIndex.from_documents(
             documents,
             embed_model=OpenAIEmbedding(model="text-embedding-3-small")
         )
-
         rag_results = index.as_query_engine().query(f"Articles pertinents pour : {theme}")
         rag_context = f"\n\n=== ARTICLES RÉCUPÉRÉS VIA RAG ===\n{rag_results}\n\n"
 
-
-    # ====================================================
+    # --------------------------------------------------
     # PHASE 2 : Reconstruction du chat
-    # ====================================================
-    conversation_text = "\n".join(
-        [f"{m['role']}: {m['content']}" for m in chat.messages]
-    )
+    # --------------------------------------------------
+    conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in chat.messages])
 
-
-    # ====================================================
-    # PHASE 3 : Prompt final pour l’agent
-    # ====================================================
+    # --------------------------------------------------
+    # PHASE 3 : Prompt final
+    # --------------------------------------------------
     prompt = (
         f"Génère une revue de presse complète sur le thème '{theme}'.\n"
         f"Utilise OBLIGATOIREMENT le tool final_result pour renvoyer le résultat.\n\n"
@@ -756,27 +751,34 @@ def generate_press_review(
         f"{rag_context}"
     )
 
+    # -----------------------
+    # LOG pour debug complet
+    print("[generate_press_review] === Prompt envoyé ===")
+    print(prompt)
+    print("[generate_press_review] === Tool final_result JSON Schema ===")
+    print(final_result.__doc__)
 
-    # ====================================================
-    # PHASE 4 : Appel LLM → l’agent va appeler final_result()
-    # ====================================================
+    # --------------------------------------------------
+    # PHASE 4 : Appel LLM
+    # --------------------------------------------------
     try:
         result = press_review_agent.run_sync(
             user_prompt=prompt,
             output_type=PressReviewOutputModel
         )
-
-        # --- Extraction correcte du tool_call ---
         tool_call = result.data["tool_calls"][0]
         review = tool_call["arguments"]
+
+        # Log pour vérifier exactement ce que le modèle renvoie
+        print("[generate_press_review] === Tool call reçu ===")
+        print(review)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur IA lors de la revue de presse: {str(e)}")
 
-
-    # ====================================================
+    # --------------------------------------------------
     # PHASE 5 : Sauvegarde BDD
-    # ====================================================
+    # --------------------------------------------------
     chat.press_review_title = review["title"]
     chat.press_review_summary = review["summary"]
     chat.press_review_articles = review["articles"]
@@ -790,8 +792,6 @@ def generate_press_review(
         "message": "Revue de presse générée",
         "review": review
     }
-
-
 # -------------------
 # Lancement du serveur
 # -------------------
