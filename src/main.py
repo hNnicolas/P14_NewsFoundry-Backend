@@ -636,7 +636,7 @@ def advanced_search_news(context: RunContext, query: str, language: str = "fr", 
     }
     
 # -------------------
-# Tool : final_result (résultat structuré pour la revue de presse) avec debug
+# Tool : final_result 
 # -------------------
 @agent.tool
 def final_result(context: RunContext, title: str, summary: str, articles: list) -> dict:
@@ -656,21 +656,18 @@ def final_result(context: RunContext, title: str, summary: str, articles: list) 
             else:
                 print(f"[final_result] article {i} keys:", a.keys())
                 print(f"[final_result] article {i} types:", {k: type(v) for k, v in a.items()})
-                # Vérification des champs obligatoires
                 for field in ["title", "summary", "url"]:
                     if field not in a:
                         print(f"[final_result][WARNING] article {i} missing field: {field}")
 
     print("[final_result] === Fin debug final_result ===\n")
-
-    # Retour final
     return {
         "title": title,
         "summary": summary,
         "articles": articles
     }
 
-# === JSON Schema GPT function calling compatible ===
+# JSON Schema GPT function calling corrigé
 final_result.__doc__ = """
 {
   "name": "final_result",
@@ -690,41 +687,15 @@ final_result.__doc__ = """
             "url": { "type": "string" }
           },
           "required": ["title", "summary", "url"],
-          "additionalProperties": false,
-          "examples": [
-            {
-              "title": "Exemple de titre",
-              "summary": "Exemple de résumé",
-              "url": "https://exemple.com/article"
-            }
-          ]
+          "additionalProperties": false
         }
       }
     },
     "required": ["title", "summary", "articles"],
-    "additionalProperties": false,
-    "examples": [
-      {
-        "title": "Revue de presse Exemple",
-        "summary": "Résumé global de la revue de presse",
-        "articles": [
-          {
-            "title": "Titre article 1",
-            "summary": "Résumé article 1",
-            "url": "https://exemple.com/article1"
-          },
-          {
-            "title": "Titre article 2",
-            "summary": "Résumé article 2",
-            "url": "https://exemple.com/article2"
-          }
-        ]
-      }
-    ]
+    "additionalProperties": false
   }
 }
 """
-
 
 
 # -------------------
