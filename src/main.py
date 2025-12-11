@@ -372,22 +372,15 @@ def add_message_smart(
     # --- Conversion conversation en texte brut pour l'agent ---
     raw_prompt = "\n".join([f"{m['role']}: {m['content']}" for m in [{"role": "system", "content": system_prompt_text}] + messages])
 
-    # --- Détection simple d'intention 'revue de presse' et extraction du sujet ---
     lowered = message_content.lower()
     wants_review = bool(re.search(r"\b(revue de presse|revue|revue détaill|revue détaillée|revu[eé] de presse|détaill|détail)\b", lowered))
 
     topic = None
     if wants_review:
-        # try to extract topic after phrases like 'revue de presse', 'revue de', 'revue sur', 'revue:'
-        # fallback: take remaining words (maximum safe length)
-        # Examples user messages: "revue de presse miss provence", "je veux une revue sur miss provence", "revue: miss provence"
-        # We remove keywords then strip
         topic = re.sub(r"(?i)\b(revue de presse|revue de|revue sur|revue:|revue|revue détaillée|revue détaill|détaillé|détaillée)\b", "", message_content)
         topic = topic.strip(" .:,-\n\t")
-        # if topic too short or empty, try to use system_prompt or previous assistant suggestion
         if not topic or len(topic) < 3:
-            # try to infer from system_prompt_text (which contains the top headlines list)
-            # take first "ligne" after dash
+          
             m = re.search(r"-\s*(.+)", system_prompt_text)
             if m:
                 topic = m.group(1).split("\n")[0].strip()
@@ -397,11 +390,9 @@ def add_message_smart(
 
     assistant_content = None
 
-    # --- Si on détecte une demande de revue: appeler directement le tool (fallback fiable) ---
     if wants_review and topic:
         try:
-            # Appel direct au tool Python (le decorator @agent.tool l'a juste enregistré, mais on peut l'appeler directement)
-            # advanced_search_news prend (context, query, ...). Le context n'est pas nécessaire pour l'appel direct ici.
+          
             tool_result = advanced_search_news(None, topic)
 
             # Si le tool renvoie une erreur structurée
@@ -441,21 +432,17 @@ def add_message_smart(
     else:
         try:
             result = agent.run_sync(user_prompt=raw_prompt, max_iterations=2)
-            # introspecter result pour debug
             try:
                 print("DEBUG: result dir():", dir(result)[:50])
             except Exception:
                 pass
 
-            # Extraction du contenu selon formes possibles
             if isinstance(result, dict) and "content" in result:
                 assistant_content = result["content"]
             else:
-                # agent.run_sync renvoie parfois un objet avec .data ou .output
                 assistant_content = getattr(result, "data", None) or getattr(result, "output", None) or str(result)
 
         except Exception as e_agent:
-            # fallback clair pour l'utilisateur
             assistant_content = (
                 "⚠️ Je n'ai pas pu traiter votre demande pour le moment, "
                 "mais la conversation a bien été enregistrée."
@@ -669,34 +656,71 @@ def generate_press_review(
         raise HTTPException(status_code=404, detail="Chat introuvable")
 
     # --------------------------------------------------
-    # PHASE 1 : RAG articles
+    # PHASE 1 : RAG sur les articles chargés
     # --------------------------------------------------
     article_urls = chat.loaded_articles or []
     documents = []
 
+    print("[generate_press_review] URLs chargées pour RAG :", article_urls)
+
     for url in article_urls:
         try:
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=8)
             if resp.status_code == 200:
-                documents.append(Document(text=resp.text, metadata={"url": url}))
+                documents.append(
+                    Document(
+                        text=resp.text,
+                        metadata={"url": url}
+                    )
+                )
+            else:
+                print(f"[RAG] {url} → statut {resp.status_code}")
         except Exception as e:
-            print(f"[generate_press_review] erreur récupération URL {url}: {e}")
+            print(f"[RAG] Erreur chargement {url}: {e}")
 
     rag_context = ""
+    article_summaries = []
+
     if documents:
+        print(f"[RAG] {len(documents)} documents chargés → parsing + indexation")
+
         parser = SimpleNodeParser.from_defaults()
         nodes = parser.get_nodes_from_documents(documents)
+
         index = VectorStoreIndex.from_documents(
             documents,
             embed_model=OpenAIEmbedding(model="text-embedding-3-small")
         )
-        rag_results = index.as_query_engine().query(f"Articles pertinents pour : {theme}")
+
+        query_engine = index.as_query_engine(similarity_top_k=4)
+        rag_results = query_engine.query(f"Trouve les articles pertinents pour : {theme}")
+
         rag_context = f"\n\n=== ARTICLES RÉCUPÉRÉS VIA RAG ===\n{rag_results}\n\n"
+
+        # Résumé individuel des articles
+        for doc in documents:
+            try:
+                summary = press_review_agent.run_sync(
+                    user_prompt=(
+                        "Résume en quelques lignes cet article pour une revue de presse :\n\n"
+                        + doc.text[:8000]
+                    )
+                )
+
+                article_summaries.append({
+                    "url": doc.metadata["url"],
+                    "summary": str(summary),
+                })
+
+            except Exception as e:
+                print(f"[RAG] Erreur résumé article {doc.metadata['url']} : {e}")
 
     # --------------------------------------------------
     # PHASE 2 : Reconstruction du chat
     # --------------------------------------------------
-    conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in chat.messages])
+    conversation_text = "\n".join(
+        [f"{m['role']}: {m['content']}" for m in chat.messages]
+    )
 
     # --------------------------------------------------
     # PHASE 3 : Prompt final
@@ -706,10 +730,9 @@ def generate_press_review(
         f"Utilise OBLIGATOIREMENT le tool final_result pour renvoyer le résultat.\n\n"
         f"=== CONVERSATION ===\n{conversation_text}\n\n"
         f"{rag_context}"
+        f"=== RÉSUMÉS DES ARTICLES ===\n{article_summaries}\n\n"
     )
 
-    # -----------------------
-    # LOG pour debug complet
     print("[generate_press_review] === Prompt envoyé ===")
     print(prompt)
     print("[generate_press_review] === Tool final_result JSON Schema ===")
@@ -723,30 +746,19 @@ def generate_press_review(
             user_prompt=prompt,
             output_type=PressReviewOutputModel
         )
-        
+
         print("\n[generate_press_review] === RAW RESULT OBJECT ===")
         print(result)
-        print("\n[generate_press_review] === RESULT.__DICT__ ===")
-        try:
-            print(json.dumps(result.__dict__, indent=2, default=str))
-        except:
-            print(result.__dict__)
+
         print("\n[generate_press_review] === RAW result.data ===")
         try:
             print(json.dumps(result.data, indent=2, default=str))
         except:
             print(result.data)
-        
-        print("\n[generate_press_review] === RAW result.data['tool_calls'] ===")
-        try:
-            print(json.dumps(result.data.get('tool_calls'), indent=2, default=str))
-        except:
-            print(result.data.get('tool_calls'))
-            
+
         tool_call = result.data["tool_calls"][0]
         review = tool_call["arguments"]
 
-        # Log pour vérifier exactement ce que le modèle renvoie
         print("[generate_press_review] === Tool call reçu ===")
         print(review)
 
@@ -764,7 +776,6 @@ def generate_press_review(
             detail=f"Erreur IA lors de la revue de presse: {str(e)}"
         )
 
-
     # --------------------------------------------------
     # PHASE 5 : Sauvegarde BDD
     # --------------------------------------------------
@@ -781,6 +792,7 @@ def generate_press_review(
         "message": "Revue de presse générée",
         "review": review
     }
+
     
 # -------------------
 # Lancement du serveur
