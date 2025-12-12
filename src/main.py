@@ -621,12 +621,10 @@ final_result.__doc__ = """
             "url": { "type": "string" }
           },
           "required": ["title", "summary", "url"],
-          "additionalProperties": false
         }
       }
     },
     "required": ["title", "summary", "articles"],
-    "additionalProperties": false
   }
 }
 """
