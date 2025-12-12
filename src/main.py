@@ -573,7 +573,8 @@ def get_top_news(
 # Tool : final_result
 # -------------------
 @press_review_agent.tool
-def final_result(context: RunContext, title: str, summary: str, articles: list) -> dict:
+def press_review_result(context: RunContext, title: str, summary: str, articles: list) -> dict:
+
     """
     Retourne la revue de presse structurée avec debug live.
     """
@@ -602,9 +603,9 @@ def final_result(context: RunContext, title: str, summary: str, articles: list) 
 
 
 # === JSON Schema GPT FUNCTION CALLING ===
-final_result.__doc__ = """
+press_review_result.__doc__ = """
 {
-  "name": "final_result",
+  "name": "press_review_result",
   "description": "Retour structuré de la revue de presse",
   "parameters": {
     "type": "object",
