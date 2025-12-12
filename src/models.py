@@ -33,6 +33,13 @@ class Chat(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(MutableList.as_mutable(JSON))
     )
+    
+    # Stockage des articles bruts provenant de World News API
+    top_news_articles: List[dict] = Field(
+        default_factory=list,
+        sa_column=Column(MutableList.as_mutable(JSON)),
+        description="Articles bruts récupérés depuis World News API"
+    )
 
     # Champs pour la revue de presse
     press_review_title: Optional[str] = None
