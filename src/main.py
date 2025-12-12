@@ -479,15 +479,25 @@ def get_top_news(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    print("🔎 [top-news] Requête reçue avec payload :", payload)
+
+    # ============================
+    # 1) Vérification clés & input
+    # ============================
     if not WORLD_NEWS_API_KEY:
-        raise HTTPException(status_code=500, detail="Clé API World News non configurée")
+        print("❌ [top-news] Clé API manquante")
+        raise HTTPException(500, "Clé API World News non configurée")
 
-    # --- Récupérer le message de l'utilisateur depuis le body ---
-    user_message_content = payload.get("user_message", "").strip()
-    if not user_message_content:
-        raise HTTPException(status_code=400, detail="Aucun message utilisateur fourni")
+    user_message_content = payload.get("user_message", "")
+    if not user_message_content or not user_message_content.strip():
+        print("❌ [top-news] Aucun message utilisateur fourni")
+        raise HTTPException(400, "Aucun message utilisateur fourni")
 
-    # --- Paramètres API World News ---
+    print(f"👤 [top-news] Message utilisateur : {user_message_content}")
+
+    # ============================
+    # 2) Appel API World News
+    # ============================
     params = {
         "source-country": "fr",
         "language": "fr",
@@ -496,8 +506,8 @@ def get_top_news(
         "max-news-per-cluster": 1
     }
 
-    # --- Requête API World News ---
     try:
+        print("🌍 [top-news] Appel API World News…")
         response = requests.get(
             WORLD_NEWS_URL,
             headers={"x-api-key": WORLD_NEWS_API_KEY},
@@ -507,68 +517,106 @@ def get_top_news(
         response.raise_for_status()
         data = response.json()
 
-        # Extraire les articles
-        articles = []
-        for cluster in data.get("top_news", []):
-            for a in cluster.get("news", []):
-                articles.append({
-                    "title": a.get("title", ""),
-                    "summary": a.get("summary") or a.get("text", ""),
-                    "url": a.get("url", "")
-                })
-        articles = articles[:10]
+    except Exception as e:
+        print("🔥 [top-news] Erreur API World News :", str(e))
+        raise HTTPException(500, f"Erreur API World News : {str(e)}")
 
-        if not articles:
-            raise HTTPException(status_code=404, detail="Aucun article trouvé")
+    # ============================
+    # 3) Extraction articles
+    # ============================
+    raw_clusters = data.get("top_news")
 
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Erreur API World News: {str(e)}")
+    if raw_clusters is None:
+        print("⚠️ [top-news] Structure API inattendue :", data)
+        raise HTTPException(500, "Structure inattendue reçue depuis World News API.")
 
-    # --- Construire le message assistant ---
-    top_title = articles[0]["title"] if articles else "Actualités"
+    print(f"📡 [top-news] Clusters reçus : {len(raw_clusters)}")
+
+    articles = []
+    for cluster in raw_clusters:
+        for a in cluster.get("news", []):
+            articles.append({
+                "title": a.get("title", "").strip(),
+                "summary": a.get("summary") or a.get("text", ""),
+                "url": a.get("url", "")
+            })
+
+    print(f"📰 [top-news] Articles extraits : {len(articles)}")
+
+    if not articles:
+        print("❌ [top-news] Aucun article trouvé")
+        raise HTTPException(404, "Aucun article trouvé")
+
+    articles = articles[:10]
+
+    # ============================
+    # 4) Générer message assistant
+    # ============================
+    top_title = articles[0]["title"] or "Actualités françaises"
     top_articles_list = "\n".join([f"- {a['title']}" for a in articles[:3]])
+
     assistant_message = (
-        f"Voici un résumé des dernières {top_title} :\n\n"
+        f"Voici les dernières actualités :\n\n"
         f"{top_articles_list}\n\n"
-        "Souhaitez-vous que je génère une revue de presse détaillée sur l'un de ces sujets ?"
+        "Souhaitez-vous une revue de presse détaillée sur l'un de ces sujets ?"
     )
 
-    # --- Mettre à jour le SystemPrompt ---
-    system_prompt_text = assistant_message
+    print("🤖 [top-news] Assistant message généré.")
+
+    # ============================
+    # 5) Mise à jour SystemPrompt
+    # ============================
     now = datetime.utcnow()
+    system_prompt_text = assistant_message
+
     system_prompt = db.exec(select(SystemPrompt)).first()
     if system_prompt:
+        print("📝 [top-news] Mise à jour du SystemPrompt")
         system_prompt.prompt_text = system_prompt_text
         system_prompt.updated_at = now
     else:
+        print("🆕 [top-news] Création du SystemPrompt")
         system_prompt = SystemPrompt(prompt_text=system_prompt_text, updated_at=now)
         db.add(system_prompt)
+
     db.commit()
     db.refresh(system_prompt)
 
-    # --- Ajouter le message dans le chat ---
+    # ============================
+    # 6) Ajouter message dans le dernier chat
+    # ============================
     chat = db.exec(
-        select(Chat).where(Chat.user_id == current_user.id).order_by(Chat.updated_at.desc())
+        select(Chat)
+        .where(Chat.user_id == current_user.id)
+        .order_by(Chat.updated_at.desc())
     ).first()
-    if chat:
+
+    if not chat:
+        print("⚠️ [top-news] Aucun chat trouvé pour l'utilisateur → pas de mise à jour")
+    else:
+        print(f"💬 [top-news] Ajout messages dans chat #{chat.id}")
+
         chat.messages.append({"role": "user", "content": user_message_content})
         chat.messages.append({"role": "assistant", "content": assistant_message})
         chat.updated_at = now
+
         db.add(chat)
         db.commit()
         db.refresh(chat)
 
-    # --- Retour JSON ---
+    print("✅ [top-news] Terminé avec succès.")
+
+    # ============================
+    # 7) Réponse API
+    # ============================
     return {
-        "message": "Actualités mises à jour et ajoutées dans le chat",
-        "user_message": user_message_content,
+        "status": "success",
         "assistant_message": assistant_message,
-        "system_prompt_preview": system_prompt_text,
+        "articles_count": len(articles),
         "chat_id": chat.id if chat else None,
-        "chat_messages": chat.messages if chat else [],
-        "updated_at": now.isoformat()
+        "updated_at": now.isoformat(),
     }
-    
+
 # -------------------
 # Tool : press_review_result
 # -------------------
