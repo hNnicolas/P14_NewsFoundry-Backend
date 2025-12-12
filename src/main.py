@@ -514,7 +514,7 @@ def get_top_news(
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
-            print("🔥 [top-news] Erreur API :", e)
+            print("[top-news] Erreur API :", e)
             return []
 
         clusters = data.get("top_news", [])
@@ -600,53 +600,69 @@ def generate_press_review_no_tool(
 ):
     theme = payload.get("theme")
     if not theme:
-        raise HTTPException(status_code=400, detail="Un thème est requis pour générer la revue de presse.")
+        raise HTTPException(
+            status_code=400,
+            detail="Un thème est requis pour générer la revue de presse."
+        )
 
     chat = db.exec(
-        select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))
+        select(Chat).where(
+            (Chat.id == chat_id) &
+            (Chat.user_id == current_user.id)
+        )
     ).first()
+
     if not chat:
         raise HTTPException(status_code=404, detail="Chat introuvable")
 
-    # --- Récupérer les articles chargés via RAG ou top_news_articles ---
+    # --- Articles récupérés (RAG / API news) ---
     articles_data = chat.top_news_articles or []
 
-    # Limiter à 10 articles pour la revue
-    selected_articles = articles_data[:10]
+    # Séparation articles
+    main_articles = articles_data[:10]
+    additional_articles = articles_data[10:]
 
-    # Générer la synthèse globale et les résumés individuels
-    article_summaries = []
-    for a in selected_articles:
-        summary_text = (a.get("summary") or a.get("content") or "")[:400]
-        article_summaries.append({
+    def normalize_article(a: dict) -> dict:
+        return {
             "title": a.get("title", "Titre indisponible"),
-            "summary": summary_text,
+            "summary": a.get("summary") or a.get("content") or "",
             "url": a.get("url", "")
-        })
+        }
 
-    # Générer un résumé global simple
-    global_summary = f"Voici une revue de presse sur le thème '{theme}'. {len(article_summaries)} articles ont été sélectionnés."
+    main_articles_formatted = [normalize_article(a) for a in main_articles]
+    additional_articles_formatted = [
+        normalize_article(a) for a in additional_articles
+    ]
 
-    # Construire le résultat structuré
+    # Résumé global
+    global_summary = (
+        f"Cette revue de presse présente une synthèse des actualités "
+        f"liées au thème « {theme} ». "
+        f"{len(main_articles_formatted)} articles principaux ont été analysés."
+    )
+
     review_result = {
         "title": f"Revue de presse — {theme}",
         "summary": global_summary,
-        "articles": article_summaries
+        "articles": main_articles_formatted,
+        "additional_articles": additional_articles_formatted
     }
 
-    # --- Sauvegarde dans le chat ---
+    # --- Sauvegarde ---
     chat.press_review_title = review_result["title"]
     chat.press_review_summary = review_result["summary"]
-    chat.press_review_articles = review_result["articles"]
+    chat.press_review_articles = review_result
     chat.updated_at = datetime.utcnow()
+
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
     return {
-        "message": "Revue de presse générée sans tool",
+        "message": "Revue de presse générée avec succès.",
         "review": review_result
     }
+
 
     
 # -------------------
