@@ -472,6 +472,7 @@ def add_message_smart(
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
 # -------------------
 
+
 @app.post("/top-news")
 def get_top_news(
     payload: dict = Body(...),
@@ -481,43 +482,42 @@ def get_top_news(
     print("🔎 [top-news] Requête reçue :", payload)
 
     # ============================
-    # 1) Vérification Input & API Key
+    # Vérification de la clé API
     # ============================
     if not WORLD_NEWS_API_KEY:
-        print("❌ [top-news] API KEY manquante")
         raise HTTPException(500, "Clé API World News non configurée")
 
     user_message = payload.get("user_message", "").strip()
     if not user_message:
-        print("❌ [top-news] Aucun message utilisateur fourni")
         raise HTTPException(400, "Aucun message utilisateur fourni")
-
     print(f"👤 [top-news] Message utilisateur : {user_message}")
 
     # ============================
-    # 2) Fonction utilitaire avec Fallback
+    # Fonction utilitaire pour récupérer les articles
     # ============================
-    def fetch_news(country, language):
+    def fetch_top_news(country="fr", language="fr", date=None):
+        date = date or datetime.utcnow().strftime("%Y-%m-%d")
         params = {
             "source-country": country,
             "language": language,
-            "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "date": date,
             "max-news-per-cluster": 5
         }
-        print(f"🌍 [top-news] Appel API World News… country={country}")
-
-        response = requests.get(
-            WORLD_NEWS_URL,
-            headers={"x-api-key": WORLD_NEWS_API_KEY},
-            params=params,
-            timeout=10
-        )
-        response.raise_for_status()
-        data = response.json()
+        print(f"🌍 [top-news] Appel API World News: country={country}, date={date}")
+        try:
+            resp = requests.get(
+                WORLD_NEWS_URL,
+                headers={"x-api-key": WORLD_NEWS_API_KEY},
+                params=params,
+                timeout=10
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            print("🔥 [top-news] Erreur API :", e)
+            return []
 
         clusters = data.get("top_news", [])
-        print(f"📡 [top-news] Clusters reçus ({country}) : {len(clusters)}")
-
         articles = []
         for cluster in clusters:
             for a in cluster.get("news", []):
@@ -529,64 +529,41 @@ def get_top_news(
                     "url": a.get("url", ""),
                     "publish_date": a.get("publish_date", "")
                 })
-
-        print(f"📰 [top-news] Articles extraits ({country}) : {len(articles)}")
         return articles
 
     # ============================
-    # 3) Appels successifs (fallback garanti)
+    # Récupération des articles
     # ============================
-    articles = fetch_news("fr", "fr")
-
+    articles = fetch_top_news("fr", "fr")
     if not articles:
+        # fallback US
         print("⚠️ Aucun article FR — fallback US")
-        articles = fetch_news("us", "en")
+        articles = fetch_top_news("us", "en")
 
     if not articles:
-        print("⚠️ Aucun article US — fallback GLOBAL")
-        articles = fetch_news("us", "en")  # global fallback possible
-
-    if not articles:
-        print("❌ Aucun article trouvé après tous les fallback")
-        raise HTTPException(404, "Aucun article trouvé")
+        # fallback global fictif si rien trouvé
+        articles = [{
+            "title": "Aucune actualité disponible",
+            "summary": "Impossible de récupérer des articles à cette date.",
+            "url": "",
+            "publish_date": datetime.utcnow().strftime("%Y-%m-%d")
+        }]
 
     # ============================
-    # 4) Message assistant
+    # Génération du message assistant
     # ============================
     list_preview = "\n".join([f"- {a['title']}" for a in articles[:5]])
-
     assistant_message = (
         f"Voici les dernières actualités du jour :\n\n"
         f"{list_preview}\n\n"
         "Souhaitez-vous une revue de presse détaillée sur un sujet précis ?"
     )
-
     print("🤖 [top-news] Assistant message généré.")
 
     # ============================
-    # 5) Mise à jour du SystemPrompt
+    # Mise à jour du chat
     # ============================
     now = datetime.utcnow()
-
-    system_prompt = db.exec(select(SystemPrompt)).first()
-    if system_prompt:
-        print("📝 [top-news] Mise à jour du SystemPrompt")
-        system_prompt.prompt_text = assistant_message
-        system_prompt.updated_at = now
-    else:
-        print("🆕 [top-news] Création du SystemPrompt")
-        system_prompt = SystemPrompt(
-            prompt_text=assistant_message,
-            updated_at=now
-        )
-        db.add(system_prompt)
-
-    db.commit()
-    db.refresh(system_prompt)
-
-    # ============================
-    # 6) Mise à jour du chat
-    # ============================
     chat = db.exec(
         select(Chat)
         .where(Chat.user_id == current_user.id)
@@ -594,23 +571,16 @@ def get_top_news(
     ).first()
 
     if chat:
-        print(f"💬 [top-news] Mise à jour du chat #{chat.id}")
-
         chat.messages.append({"role": "user", "content": user_message})
         chat.messages.append({"role": "assistant", "content": assistant_message})
-        chat.updated_at = now
-
-        print("🗃️ [top-news] Stockage des articles dans chat.top_news_articles")
         chat.top_news_articles = articles
-
+        chat.updated_at = now
         db.add(chat)
         db.commit()
         db.refresh(chat)
-    else:
-        print("⚠️ [top-news] Aucun chat trouvé pour l'utilisateur")
 
     # ============================
-    # 7) Réponse API
+    # Réponse API
     # ============================
     return {
         "status": "success",
@@ -618,7 +588,7 @@ def get_top_news(
         "articles_count": len(articles),
         "articles": articles,
         "chat_id": chat.id if chat else None,
-        "updated_at": now.isoformat(),
+        "updated_at": now.isoformat()
     }
 
 
