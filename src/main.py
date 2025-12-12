@@ -570,19 +570,18 @@ def get_top_news(
     }
     
 # -------------------
-# Tool : final_result
+# Tool : press_review_result
 # -------------------
 @press_review_agent.tool
 def press_review_result(context: RunContext, title: str, summary: str, articles: list) -> dict:
-
     """
     Retourne la revue de presse structurée avec debug live.
     """
 
-    print("[final_result] === Début debug final_result ===")
-    print("[final_result] title:", repr(title))
-    print("[final_result] summary:", repr(summary))
-    print("[final_result] articles:", repr(articles))
+    print("[press_review_result] === Début debug press_review_result ===")
+    print("[press_review_result] title:", repr(title))
+    print("[press_review_result] summary:", repr(summary))
+    print("[press_review_result] articles:", repr(articles))
 
     if articles:
         for i, a in enumerate(articles):
@@ -593,7 +592,7 @@ def press_review_result(context: RunContext, title: str, summary: str, articles:
                     if field not in a:
                         print(f"[WARNING] article {i} missing field:", field)
 
-    print("[final_result] === Fin debug final_result ===\n")
+    print("[press_review_result] === Fin debug press_review_result ===\n")
 
     return {
         "title": title,
@@ -629,7 +628,6 @@ press_review_result.__doc__ = """
   }
 }
 """
-
 
 
 # -------------------
@@ -727,10 +725,10 @@ def generate_press_review(
     # --------------------------------------------------
     prompt = (
         f"Génère une revue de presse complète sur le thème '{theme}'.\n"
-        "TU DOIS appeler le tool `final_result`. "
+        "TU DOIS appeler le tool `press_review_result`. "
         "Tu dois respecter STRICTEMENT le JSON Schema. "
-        "Ne renvoie AUCUN texte en dehors du tool call."
-        f"Utilise OBLIGATOIREMENT le tool final_result pour renvoyer le résultat.\n\n"
+        "Ne renvoie AUCUN texte en dehors du tool call. "
+        "Utilise OBLIGATOIREMENT le tool press_review_result pour renvoyer le résultat.\n\n"
         f"=== CONVERSATION ===\n{conversation_text}\n\n"
         f"{rag_context}"
         f"=== RÉSUMÉS DES ARTICLES ===\n{article_summaries}\n\n"
@@ -738,8 +736,8 @@ def generate_press_review(
 
     print("[generate_press_review] === Prompt envoyé ===")
     print(prompt)
-    print("[generate_press_review] === Tool final_result JSON Schema ===")
-    print(final_result.__doc__)
+    print("[generate_press_review] === Tool press_review_result JSON Schema ===")
+    print(press_review_result.__doc__)
 
     # --------------------------------------------------
     # PHASE 4 : Appel LLM
