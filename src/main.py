@@ -651,7 +651,7 @@ def generate_press_review_no_tool(
     # --- Sauvegarde ---
     chat.press_review_title = review_result["title"]
     chat.press_review_summary = review_result["summary"]
-    chat.press_review_articles = review_result
+    chat.press_review_articles = review_result["articles"]
     chat.updated_at = datetime.utcnow()
 
     db.add(chat)
