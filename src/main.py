@@ -597,25 +597,39 @@ def get_top_news(
 # -------------------
 @press_review_agent.tool
 def press_review_result(context: RunContext, title: str, summary: str, articles: list) -> dict:
+    # Forcer le docstring JSON correct à chaque run
+    press_review_result.__doc__ = """
+    {
+      "name": "press_review_result",
+      "description": "Retour structuré de la revue de presse",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "articles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": { "type": "string" },
+                "summary": { "type": "string" },
+                "url": { "type": "string" }
+              },
+              "required": ["title", "summary", "url"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["title", "summary", "articles"],
+        "additionalProperties": false
+      }
+    }
     """
-    Retourne la revue de presse structurée avec debug live.
-    """
-
-    print("[press_review_result] === Début debug press_review_result ===")
-    print("[press_review_result] title:", repr(title))
-    print("[press_review_result] summary:", repr(summary))
-    print("[press_review_result] articles:", repr(articles))
-
-    if articles:
-        for i, a in enumerate(articles):
-            if not isinstance(a, dict):
-                print(f"[WARNING] article {i} is not a dict:", type(a))
-            else:
-                for field in ["title", "summary", "url"]:
-                    if field not in a:
-                        print(f"[WARNING] article {i} missing field:", field)
-
-    print("[press_review_result] === Fin debug press_review_result ===\n")
+    # Debug
+    print("[press_review_result] title:", title)
+    print("[press_review_result] summary:", summary)
+    print("[press_review_result] articles:", articles)
 
     return {
         "title": title,
@@ -623,36 +637,6 @@ def press_review_result(context: RunContext, title: str, summary: str, articles:
         "articles": articles
     }
 
-
-# === JSON Schema GPT FUNCTION CALLING ===
-press_review_result.__doc__ = """
-{
-  "name": "press_review_result",
-  "description": "Retour structuré de la revue de presse",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "title": { "type": "string" },
-      "summary": { "type": "string" },
-      "articles": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "properties": {
-            "title": { "type": "string" },
-            "summary": { "type": "string" },
-            "url": { "type": "string" }
-          },
-          "required": ["title", "summary", "url"],
-          "additionalProperties": false
-        }
-      }
-    },
-    "required": ["title", "summary", "articles"],
-    "additionalProperties": false
-  }
-}
-"""
 
 
 # -------------------
