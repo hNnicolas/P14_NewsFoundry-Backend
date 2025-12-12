@@ -572,7 +572,7 @@ def get_top_news(
 # -------------------
 # Tool : final_result
 # -------------------
-@agent.tool
+@press_review_agent.tool
 def final_result(context: RunContext, title: str, summary: str, articles: list) -> dict:
     """
     Retourne la revue de presse structurée avec debug live.
@@ -726,6 +726,9 @@ def generate_press_review(
     # --------------------------------------------------
     prompt = (
         f"Génère une revue de presse complète sur le thème '{theme}'.\n"
+        "TU DOIS appeler le tool `final_result`. "
+        "Tu dois respecter STRICTEMENT le JSON Schema. "
+        "Ne renvoie AUCUN texte en dehors du tool call."
         f"Utilise OBLIGATOIREMENT le tool final_result pour renvoyer le résultat.\n\n"
         f"=== CONVERSATION ===\n{conversation_text}\n\n"
         f"{rag_context}"
@@ -756,7 +759,7 @@ def generate_press_review(
             print(result.data)
 
         tool_call = result.data["tool_calls"][0]
-        review = tool_call["arguments"]
+        review = tool_call.arguments
 
         print("[generate_press_review] === Tool call reçu ===")
         print(review)

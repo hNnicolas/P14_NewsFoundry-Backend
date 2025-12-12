@@ -69,10 +69,11 @@ class SystemPrompt(SQLModel, table=True):
 # --------------------------
 class ArticleModel(BaseModel):
     title: str
-    url: Optional[str] = None
-    summary: Optional[str] = None
+    summary: str
+    url: str
 
 class PressReviewOutputModel(BaseModel):
     title: str
     summary: str
-    articles: List[ArticleModel]
+    articles: list[ArticleModel]
+
