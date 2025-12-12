@@ -642,6 +642,9 @@ def press_review_result(context: RunContext, title: str, summary: str, articles:
 # -------------------
 # Générer une revue de presse à partir du thème
 # -------------------
+# -------------------
+# Endpoint pour générer une revue de presse complète
+# -------------------
 @app.post("/chats/{chat_id}/generate-press-review")
 def generate_press_review(
     chat_id: int,
@@ -662,30 +665,22 @@ def generate_press_review(
     if not chat:
         raise HTTPException(status_code=404, detail="Chat introuvable")
 
-    # --------------------------------------------------
+    # -------------------------------
     # PHASE 1 : RAG sur les articles chargés
-    # --------------------------------------------------
-    article_urls = chat.loaded_articles or []
+    # -------------------------------
     documents = []
+    print("[generate_press_review] URLs chargées pour RAG :", chat.loaded_articles)
 
-    print("[generate_press_review] URLs chargées pour RAG :", article_urls)
-
-    for url in article_urls:
+    for url in chat.loaded_articles:
         try:
             resp = requests.get(url, timeout=8)
             if resp.status_code == 200:
-                documents.append(
-                    Document(
-                        text=resp.text,
-                        metadata={"url": url}
-                    )
-                )
+                documents.append(Document(text=resp.text, metadata={"url": url}))
             else:
                 print(f"[RAG] {url} → statut {resp.status_code}")
         except Exception as e:
             print(f"[RAG] Erreur chargement {url}: {e}")
 
-    rag_context = ""
     article_summaries = []
 
     if documents:
@@ -701,94 +696,59 @@ def generate_press_review(
 
         query_engine = index.as_query_engine(similarity_top_k=4)
         rag_results = query_engine.query(f"Trouve les articles pertinents pour : {theme}")
+        print("[RAG] Résultat de la requête RAG :", rag_results)
 
-        rag_context = f"\n\n=== ARTICLES RÉCUPÉRÉS VIA RAG ===\n{rag_results}\n\n"
-
-        # Résumé individuel des articles
+        # Résumer chaque article
         for doc in documents:
             try:
                 summary = press_review_agent.run_sync(
-                    user_prompt=(
-                        "Résume en quelques lignes cet article pour une revue de presse :\n\n"
-                        + doc.text[:8000]
-                    )
+                    user_prompt="Résume cet article pour une revue de presse :\n\n" + doc.text[:4000]
                 )
-
                 article_summaries.append({
-                    "url": doc.metadata["url"],
+                    "title": doc.metadata.get("title", "Titre indisponible"),
                     "summary": str(summary),
+                    "url": doc.metadata["url"]
                 })
-
             except Exception as e:
                 print(f"[RAG] Erreur résumé article {doc.metadata['url']} : {e}")
 
-    # --------------------------------------------------
-    # PHASE 2 : Reconstruction du chat
-    # --------------------------------------------------
-    conversation_text = "\n".join(
-        [f"{m['role']}: {m['content']}" for m in chat.messages]
-    )
+    # -------------------------------
+    # PHASE 2 : Prompt final pour l'agent
+    # -------------------------------
+    conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in chat.messages])
 
-    # --------------------------------------------------
-    # PHASE 3 : Prompt final
-    # --------------------------------------------------
     prompt = (
         f"Génère une revue de presse complète sur le thème '{theme}'.\n"
-        "TU DOIS appeler le tool `press_review_result`. "
-        "Tu dois respecter STRICTEMENT le JSON Schema. "
-        "Ne renvoie AUCUN texte en dehors du tool call. "
-        "Utilise OBLIGATOIREMENT le tool press_review_result pour renvoyer le résultat.\n\n"
+        "TU DOIS appeler STRICTEMENT le tool `press_review_result` et respecter son JSON Schema.\n\n"
         f"=== CONVERSATION ===\n{conversation_text}\n\n"
-        f"{rag_context}"
-        f"=== RÉSUMÉS DES ARTICLES ===\n{article_summaries}\n\n"
+        f"=== ARTICLES RÉSUMÉS ===\n{article_summaries}\n\n"
     )
 
-    print("[generate_press_review] === Prompt envoyé ===")
+    print("[generate_press_review] Prompt final envoyé à l'agent :")
     print(prompt)
-    print("[generate_press_review] === Tool press_review_result JSON Schema ===")
-    print(press_review_result.__doc__)
 
-    # --------------------------------------------------
-    # PHASE 4 : Appel LLM
-    # --------------------------------------------------
+    # -------------------------------
+    # PHASE 3 : Appel de l'agent
+    # -------------------------------
     try:
         result = press_review_agent.run_sync(
             user_prompt=prompt,
             output_type=PressReviewOutputModel
         )
-
-        print("\n[generate_press_review] === RAW RESULT OBJECT ===")
-        print(result)
-
-        print("\n[generate_press_review] === RAW result.data ===")
-        try:
-            print(json.dumps(result.data, indent=2, default=str))
-        except:
-            print(result.data)
-
+        # Récupération du tool call
         tool_call = result.data["tool_calls"][0]
         review = tool_call.arguments
 
-        print("[generate_press_review] === Tool call reçu ===")
-        print(review)
-
     except Exception as e:
-        print("\n[generate_press_review] === ERREUR CRITIQUE ===")
-        print("Type :", type(e))
-        print("Message :", str(e))
-        print("-------- TRACEBACK COMPLET --------")
-        import traceback
-        traceback.print_exc()
-        print("-----------------------------------\n")
-
+        print("❌ ERREUR lors de la génération revue de presse :", e)
         raise HTTPException(
             status_code=500,
             detail=f"Erreur IA lors de la revue de presse: {str(e)}"
         )
 
-    # --------------------------------------------------
-    # PHASE 5 : Sauvegarde BDD
-    # --------------------------------------------------
+    # -------------------------------
+    # PHASE 4 : Sauvegarde en BDD
+    # -------------------------------
     chat.press_review_title = review["title"]
     chat.press_review_summary = review["summary"]
     chat.press_review_articles = review["articles"]
