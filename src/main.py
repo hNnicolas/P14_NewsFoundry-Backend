@@ -472,28 +472,27 @@ def add_message_smart(
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
 # -------------------
 
-
 @app.post("/top-news")
 def get_top_news(
     payload: dict = Body(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    print("🔎 [top-news] Requête reçue avec payload :", payload)
+    print("🔎 [top-news] Requête reçue :", payload)
 
     # ============================
-    # 1) Vérification clés & input
+    # 1) Vérification Input & API Key
     # ============================
     if not WORLD_NEWS_API_KEY:
-        print("❌ [top-news] Clé API manquante")
+        print("❌ [top-news] API KEY manquante")
         raise HTTPException(500, "Clé API World News non configurée")
 
-    user_message_content = payload.get("user_message", "")
-    if not user_message_content or not user_message_content.strip():
+    user_message = payload.get("user_message", "").strip()
+    if not user_message:
         print("❌ [top-news] Aucun message utilisateur fourni")
         raise HTTPException(400, "Aucun message utilisateur fourni")
 
-    print(f"👤 [top-news] Message utilisateur : {user_message_content}")
+    print(f"👤 [top-news] Message utilisateur : {user_message}")
 
     # ============================
     # 2) Appel API World News
@@ -503,7 +502,7 @@ def get_top_news(
         "language": "fr",
         "date": datetime.utcnow().strftime("%Y-%m-%d"),
         "headlines-only": "false",
-        "max-news-per-cluster": 1
+        "max-news-per-cluster": 5  
     }
 
     try:
@@ -518,72 +517,73 @@ def get_top_news(
         data = response.json()
 
     except Exception as e:
-        print("🔥 [top-news] Erreur API World News :", str(e))
-        raise HTTPException(500, f"Erreur API World News : {str(e)}")
+        print("🔥 [top-news] Erreur API :", e)
+        raise HTTPException(500, f"Erreur API World News : {e}")
 
     # ============================
-    # 3) Extraction articles
+    # 3) Extraction des articles
     # ============================
-    raw_clusters = data.get("top_news")
-
-    if raw_clusters is None:
-        print("⚠️ [top-news] Structure API inattendue :", data)
+    clusters = data.get("top_news")
+    if clusters is None:
+        print("⚠️ [top-news] Structure inattendue :", data)
         raise HTTPException(500, "Structure inattendue reçue depuis World News API.")
 
-    print(f"📡 [top-news] Clusters reçus : {len(raw_clusters)}")
+    print(f"📡 [top-news] Clusters reçus : {len(clusters)}")
 
     articles = []
-    for cluster in raw_clusters:
+    for cluster in clusters:
         for a in cluster.get("news", []):
+            if not a.get("title"):
+                continue
             articles.append({
                 "title": a.get("title", "").strip(),
-                "summary": a.get("summary") or a.get("text", ""),
-                "url": a.get("url", "")
+                "summary": a.get("summary") or a.get("text") or "",
+                "url": a.get("url", ""),
+                "publish_date": a.get("publish_date", "")
             })
 
     print(f"📰 [top-news] Articles extraits : {len(articles)}")
 
-    if not articles:
-        print("❌ [top-news] Aucun article trouvé")
+    if len(articles) == 0:
         raise HTTPException(404, "Aucun article trouvé")
 
-    articles = articles[:10]
-
     # ============================
-    # 4) Générer message assistant
+    # 4) Message assistant
     # ============================
-    top_title = articles[0]["title"] or "Actualités françaises"
-    top_articles_list = "\n".join([f"- {a['title']}" for a in articles[:3]])
+    first_title = articles[0]["title"]
+    list_preview = "\n".join([f"- {a['title']}" for a in articles[:5]])
 
     assistant_message = (
-        f"Voici les dernières actualités :\n\n"
-        f"{top_articles_list}\n\n"
-        "Souhaitez-vous une revue de presse détaillée sur l'un de ces sujets ?"
+        f"Voici les dernières actualités du jour :\n\n"
+        f"{list_preview}\n\n"
+        "Souhaitez-vous une revue de presse détaillée sur un sujet précis ?"
     )
 
     print("🤖 [top-news] Assistant message généré.")
 
     # ============================
-    # 5) Mise à jour SystemPrompt
+    # 5) Mise à jour du SystemPrompt
     # ============================
     now = datetime.utcnow()
-    system_prompt_text = assistant_message
 
     system_prompt = db.exec(select(SystemPrompt)).first()
     if system_prompt:
         print("📝 [top-news] Mise à jour du SystemPrompt")
-        system_prompt.prompt_text = system_prompt_text
+        system_prompt.prompt_text = assistant_message
         system_prompt.updated_at = now
     else:
         print("🆕 [top-news] Création du SystemPrompt")
-        system_prompt = SystemPrompt(prompt_text=system_prompt_text, updated_at=now)
+        system_prompt = SystemPrompt(
+            prompt_text=assistant_message,
+            updated_at=now
+        )
         db.add(system_prompt)
 
     db.commit()
     db.refresh(system_prompt)
 
     # ============================
-    # 6) Ajouter message dans le dernier chat
+    # 6) Mise à jour du chat
     # ============================
     chat = db.exec(
         select(Chat)
@@ -591,20 +591,21 @@ def get_top_news(
         .order_by(Chat.updated_at.desc())
     ).first()
 
-    if not chat:
-        print("⚠️ [top-news] Aucun chat trouvé pour l'utilisateur → pas de mise à jour")
-    else:
-        print(f"💬 [top-news] Ajout messages dans chat #{chat.id}")
+    if chat:
+        print(f"💬 [top-news] Mise à jour du chat #{chat.id}")
 
-        chat.messages.append({"role": "user", "content": user_message_content})
+        chat.messages.append({"role": "user", "content": user_message})
         chat.messages.append({"role": "assistant", "content": assistant_message})
         chat.updated_at = now
+
+        print("🗃️ [top-news] Stockage des articles dans chat.top_news_articles")
+        chat.top_news_articles = articles
 
         db.add(chat)
         db.commit()
         db.refresh(chat)
-
-    print("✅ [top-news] Terminé avec succès.")
+    else:
+        print("⚠️ [top-news] Aucun chat trouvé pour l'utilisateur")
 
     # ============================
     # 7) Réponse API
@@ -613,9 +614,11 @@ def get_top_news(
         "status": "success",
         "assistant_message": assistant_message,
         "articles_count": len(articles),
+        "articles": articles,  
         "chat_id": chat.id if chat else None,
         "updated_at": now.isoformat(),
     }
+
 
 # -------------------
 # Tool : press_review_result
