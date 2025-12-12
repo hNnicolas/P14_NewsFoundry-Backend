@@ -620,14 +620,15 @@ final_result.__doc__ = """
             "summary": { "type": "string" },
             "url": { "type": "string" }
           },
-          "required": ["title", "summary", "url"],
+          "required": ["title", "summary", "url"]
         }
       }
     },
-    "required": ["title", "summary", "articles"],
+    "required": ["title", "summary", "articles"]
   }
 }
 """
+
 
 
 # -------------------
