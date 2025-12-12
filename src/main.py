@@ -495,18 +495,17 @@ def get_top_news(
     print(f"👤 [top-news] Message utilisateur : {user_message}")
 
     # ============================
-    # 2) Appel API World News
+    # 2) Fonction utilitaire avec Fallback
     # ============================
-    params = {
-        "source-country": "fr",
-        "language": "fr",
-        "date": datetime.utcnow().strftime("%Y-%m-%d"),
-        "headlines-only": "false",
-        "max-news-per-cluster": 5  
-    }
+    def fetch_news(country, language):
+        params = {
+            "source-country": country,
+            "language": language,
+            "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "max-news-per-cluster": 5
+        }
+        print(f"🌍 [top-news] Appel API World News… country={country}")
 
-    try:
-        print("🌍 [top-news] Appel API World News…")
         response = requests.get(
             WORLD_NEWS_URL,
             headers={"x-api-key": WORLD_NEWS_API_KEY},
@@ -516,41 +515,44 @@ def get_top_news(
         response.raise_for_status()
         data = response.json()
 
-    except Exception as e:
-        print("🔥 [top-news] Erreur API :", e)
-        raise HTTPException(500, f"Erreur API World News : {e}")
+        clusters = data.get("top_news", [])
+        print(f"📡 [top-news] Clusters reçus ({country}) : {len(clusters)}")
+
+        articles = []
+        for cluster in clusters:
+            for a in cluster.get("news", []):
+                if not a.get("title"):
+                    continue
+                articles.append({
+                    "title": a.get("title", "").strip(),
+                    "summary": a.get("summary") or a.get("text") or "",
+                    "url": a.get("url", ""),
+                    "publish_date": a.get("publish_date", "")
+                })
+
+        print(f"📰 [top-news] Articles extraits ({country}) : {len(articles)}")
+        return articles
 
     # ============================
-    # 3) Extraction des articles
+    # 3) Appels successifs (fallback garanti)
     # ============================
-    clusters = data.get("top_news")
-    if clusters is None:
-        print("⚠️ [top-news] Structure inattendue :", data)
-        raise HTTPException(500, "Structure inattendue reçue depuis World News API.")
+    articles = fetch_news("fr", "fr")
 
-    print(f"📡 [top-news] Clusters reçus : {len(clusters)}")
+    if not articles:
+        print("⚠️ Aucun article FR — fallback US")
+        articles = fetch_news("us", "en")
 
-    articles = []
-    for cluster in clusters:
-        for a in cluster.get("news", []):
-            if not a.get("title"):
-                continue
-            articles.append({
-                "title": a.get("title", "").strip(),
-                "summary": a.get("summary") or a.get("text") or "",
-                "url": a.get("url", ""),
-                "publish_date": a.get("publish_date", "")
-            })
+    if not articles:
+        print("⚠️ Aucun article US — fallback GLOBAL")
+        articles = fetch_news("us", "en")  # global fallback possible
 
-    print(f"📰 [top-news] Articles extraits : {len(articles)}")
-
-    if len(articles) == 0:
+    if not articles:
+        print("❌ Aucun article trouvé après tous les fallback")
         raise HTTPException(404, "Aucun article trouvé")
 
     # ============================
     # 4) Message assistant
     # ============================
-    first_title = articles[0]["title"]
     list_preview = "\n".join([f"- {a['title']}" for a in articles[:5]])
 
     assistant_message = (
@@ -614,7 +616,7 @@ def get_top_news(
         "status": "success",
         "assistant_message": assistant_message,
         "articles_count": len(articles),
-        "articles": articles,  
+        "articles": articles,
         "chat_id": chat.id if chat else None,
         "updated_at": now.isoformat(),
     }
