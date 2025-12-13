@@ -662,8 +662,28 @@ def generate_press_review_no_tool(
         "message": "Revue de presse générée avec succès.",
         "review": review_result
     }
+    
+@app.get("/chats/{chat_id}/press-review")
+def get_press_review(
+    chat_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    chat = db.exec(
+        select(Chat).where(
+            (Chat.id == chat_id) &
+            (Chat.user_id == current_user.id)
+        )
+    ).first()
 
+    if not chat or not chat.press_review_articles:
+        raise HTTPException(status_code=404, detail="Revue introuvable")
 
+    return {
+        "title": chat.press_review_title,
+        "summary": chat.press_review_summary,
+        "articles": chat.press_review_articles
+    }
     
 # -------------------
 # Lancement du serveur
