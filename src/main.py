@@ -67,7 +67,9 @@ def get_current_user(
 ):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token manquant ou invalide")
+
     token = authorization.split(" ")[1]
+
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
@@ -81,7 +83,12 @@ def get_current_user(
     user = db.exec(select(User).where(User.email == email)).first()
     if not user:
         raise HTTPException(status_code=401, detail="Utilisateur introuvable")
-    return user
+
+    return {
+        "user": user,
+        "token": token
+    }
+
 
 # -------------------
 # Helpers: normalisation & détection affirmative
@@ -301,24 +308,39 @@ def create_chat(
 def add_message(
     chat_id: int,
     payload: dict,
-    current_user: User = Depends(get_current_user),
+    auth = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Ajoute un message utilisateur dans un chat existant.
     L'agent décide seul s'il doit appeler un tool (ex: search_news_tool).
     """
+
+    # ============================
+    # Auth
+    # ============================
+    user = auth["user"]
+    token = auth["token"]
+
+    print("🔐 [AUTH] User :", user.email)
+    print("🔐 [AUTH] Token présent :", bool(token))
+
+    # ============================
+    # Message utilisateur
+    # ============================
     message_content = payload.get("message", "").strip()
     if not message_content:
         raise HTTPException(status_code=400, detail="Message requis")
 
-    # -------------------
+    print("💬 [USER MESSAGE] :", message_content)
+
+    # ============================
     # Récupérer le chat
-    # -------------------
+    # ============================
     chat = db.exec(
         select(Chat).where(
             (Chat.id == chat_id) &
-            (Chat.user_id == current_user.id)
+            (Chat.user_id == user.id)
         )
     ).first()
 
@@ -333,9 +355,9 @@ def add_message(
         "content": message_content
     })
 
-    # -------------------
+    # ============================
     # Charger le system prompt
-    # -------------------
+    # ============================
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else (
         "Tu es l’assistant NewsFoundry.\n\n"
@@ -352,9 +374,9 @@ def add_message(
         "- réponds en français\n"
     )
 
-    # -------------------
-    # Construire le prompt conversationnel
-    # -------------------
+    # ============================
+    # Construire le prompt
+    # ============================
     conversation = [
         {"role": "system", "content": system_prompt_text},
         *messages
@@ -364,20 +386,20 @@ def add_message(
         f"{m['role']}: {m['content']}" for m in conversation
     )
 
-    # -------------------
-    # Appel de l'agent (AVEC TOOLS)
-    # -------------------
-    
     print("🧠 [AGENT] Prompt envoyé au LLM ↓↓↓")
+    print(raw_prompt)
 
+    # ============================
+    # Appel de l'agent (AVEC TOOLS)
+    # ============================
     try:
         result = agent.run_sync(
             user_prompt=raw_prompt,
             deps={
-                "token": current_user.jwt_token
+                "token": token  # ✅ JWT réel
             }
         )
-        
+
         print("🧠 [AGENT] Result type :", type(result))
         print("🧠 [AGENT] Result brut :", result)
 
@@ -388,19 +410,19 @@ def add_message(
             if hasattr(result, "output")
             else str(result)
         )
-        
+
         print("🤖 [AGENT] Réponse assistant générée")
 
     except Exception as e:
-        print("❌ ERREUR AGENT :", e)
+        print("❌ [AGENT ERROR] :", e)
         assistant_content = (
             "⚠️ Je n’ai pas pu traiter votre demande pour le moment. "
             "Merci de réessayer."
         )
 
-    # -------------------
+    # ============================
     # Sauvegarde réponse assistant
-    # -------------------
+    # ============================
     messages.append({
         "role": "assistant",
         "content": assistant_content
@@ -412,9 +434,12 @@ def add_message(
         db.add(chat)
         db.commit()
         db.refresh(chat)
+
+        print("💾 [DB] Message sauvegardé")
+
     except Exception as e_db:
         db.rollback()
-        print("❌ ERREUR DB :", e_db)
+        print("❌ [DB ERROR] :", e_db)
         raise HTTPException(
             status_code=500,
             detail="Erreur lors de la sauvegarde du message"
@@ -424,6 +449,7 @@ def add_message(
         "assistant_response": assistant_content,
         "messages": chat.messages
     }
+
 
 @app.post("/search-news")
 def search_news(
@@ -476,6 +502,9 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
     """
     Recherche des articles récents via l’API interne /search-news
     """
+    print("🔧 [TOOL] search_news_tool CALLED")
+    print("🔍 [TOOL] Query :", query)
+    print("🔐 [TOOL] Token présent :", bool(ctx.deps.get("token")))
     try:
         resp = requests.post(
             "http://localhost:8000/search-news",
@@ -485,6 +514,7 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
             json={"query": query},
             timeout=10
         )
+        print("📡 [TOOL] Status code :", resp.status_code)
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
