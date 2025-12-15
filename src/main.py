@@ -710,7 +710,7 @@ def get_top_news(
     now = datetime.utcnow()
 
     chat = Chat(
-        user_id=current_user.id,
+        user_id=user.id,
         title="Discussion du",
         messages=[
             {"role": "user", "content": user_message},
