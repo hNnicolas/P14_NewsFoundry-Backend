@@ -232,9 +232,10 @@ def login(payload: dict, db: Session = Depends(get_db)):
 @app.post("/chats")
 def create_chat(
     payload: dict = {},
-    current_user: User = Depends(get_current_user),
+    auth = Depends(get_current_user),
     db: Session = Depends(get_db)
-):    
+):   
+    user = auth["user"] 
     user_message = payload.get("message", "").strip()
     assistant_message = payload.get("assistant_message", "").strip()
 
@@ -250,7 +251,7 @@ def create_chat(
         messages.append({"role": "assistant", "content": assistant_message})
 
     chat = Chat(
-        user_id=current_user.id,
+        user_id=user.id,
         title=payload.get("title", "Nouvelle conversation"),
         messages=messages,
         created_at=datetime.utcnow(),
@@ -300,6 +301,31 @@ def create_chat(
         "assistant_response": assistant_response,
         "messages": chat.messages
     }
+
+@app.get("/chats")
+def get_user_chats(
+    auth = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    user = auth["user"]
+
+    chats = db.exec(
+        select(Chat)
+        .where(Chat.user_id == user.id)
+        .order_by(Chat.updated_at.desc())
+    ).all()
+
+    return [
+        {
+            "chat_id": chat.id,
+            "title": chat.title,
+            "messages": chat.messages or [],
+            "created_at": chat.created_at.isoformat() if chat.created_at else None,
+            "updated_at": chat.updated_at.isoformat() if chat.updated_at else None,
+        }
+        for chat in chats
+    ]
+
     
 @app.get("/chats/{chat_id}")
 def get_chat(
