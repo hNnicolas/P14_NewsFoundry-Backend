@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 from src.main import app
-from src.models import User
+from src.models import User, Chat
 from src.database import init_db, engine
 import bcrypt
 import jwt
@@ -14,7 +14,6 @@ ALGORITHM = "HS256"
 
 @pytest.fixture(scope="module")
 def client():
-    # Initialisation de la base de données
     init_db()
     with TestClient(app) as c:
         yield c
@@ -49,58 +48,15 @@ def auth_token(test_user):
     )
 
 
-def test_create_chat(client, auth_token):
-    headers = {"Authorization": f"Bearer {auth_token}"}
-    payload = {"message": "Bonjour"}
-
-    response = client.post("/chats", json=payload, headers=headers)
-
-    assert response.status_code == 200
-
-    data = response.json()
-    assert "chat_id" in data
-    assert "assistant_response" in data
-    assert "messages" in data
-    assert len(data["messages"]) == 2  # user + assistant
-
-
-def test_get_chat(client, auth_token):
+def test_top_news_creates_chat(client, auth_token):
     headers = {"Authorization": f"Bearer {auth_token}"}
 
-    # Création du chat
-    res = client.post(
-        "/chats",
-        json={"message": "Hello"},
-        headers=headers
-    )
-    chat_id = res.json()["chat_id"]
+    payload = {
+        "user_message": "résumé de l'actualité économique"
+    }
 
-    # Récupération du chat
-    response = client.get(f"/chats/{chat_id}", headers=headers)
-
-    assert response.status_code == 200
-
-    data = response.json()
-    assert data["chat_id"] == chat_id
-    assert isinstance(data["messages"], list)
-    assert len(data["messages"]) >= 2
-
-
-def test_add_message(client, auth_token):
-    headers = {"Authorization": f"Bearer {auth_token}"}
-
-    # Création du chat
-    res = client.post(
-        "/chats",
-        json={"message": "Salut"},
-        headers=headers
-    )
-    chat_id = res.json()["chat_id"]
-
-    # Ajout d’un message
-    payload = {"message": "Comment ça va ?"}
     response = client.post(
-        f"/chats/{chat_id}/messages",
+        "/top-news",
         json=payload,
         headers=headers
     )
@@ -108,5 +64,57 @@ def test_add_message(client, auth_token):
     assert response.status_code == 200
 
     data = response.json()
-    assert "messages" in data
-    assert len(data["messages"]) >= 3  # user + assistant + user
+    assert "assistant_message" in data
+    assert "articles" in data
+    assert "chat_id" in data
+    assert isinstance(data["articles"], list)
+
+
+def test_search_news(client, auth_token):
+    headers = {"Authorization": f"Bearer {auth_token}"}
+
+    payload = {
+        "query": "économie",
+        "language": "fr"
+    }
+
+    response = client.post(
+        "/search-news",
+        json=payload,
+        headers=headers
+    )
+
+    # 200 si API OK, 502 si World News indisponible
+    assert response.status_code in (200, 502)
+
+    if response.status_code == 200:
+        data = response.json()
+        assert "articles" in data
+        assert isinstance(data["articles"], list)
+
+
+def test_generate_press_review(client, auth_token):
+    headers = {"Authorization": f"Bearer {auth_token}"}
+
+    # 1. Création d’un chat avec top-news
+    chat_res = client.post(
+        "/top-news",
+        json={"user_message": "actualité politique"},
+        headers=headers
+    )
+    chat_id = chat_res.json()["chat_id"]
+
+    # 2. Génération de la revue de presse
+    response = client.post(
+        f"/chats/{chat_id}/generate-press-review",
+        json={"theme": "Politique"},
+        headers=headers
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert "review" in data
+    assert "title" in data["review"]
+    assert "summary" in data["review"]
+    assert "articles" in data["review"]
