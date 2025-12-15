@@ -367,14 +367,19 @@ def add_message(
     # -------------------
     # Appel de l'agent (AVEC TOOLS)
     # -------------------
+    
+    print("🧠 [AGENT] Prompt envoyé au LLM ↓↓↓")
+
     try:
         result = agent.run_sync(
             user_prompt=raw_prompt,
             deps={
-                "token": f"{payload.get('token')}"
-            },
-            max_iterations=3
+                "token": current_user.jwt_token
+            }
         )
+        
+        print("🧠 [AGENT] Result type :", type(result))
+        print("🧠 [AGENT] Result brut :", result)
 
         assistant_content = (
             result.data
@@ -383,6 +388,8 @@ def add_message(
             if hasattr(result, "output")
             else str(result)
         )
+        
+        print("🤖 [AGENT] Réponse assistant générée")
 
     except Exception as e:
         print("❌ ERREUR AGENT :", e)
@@ -418,11 +425,151 @@ def add_message(
         "messages": chat.messages
     }
 
+@app.post("/search-news")
+def search_news(
+    payload: dict = Body(...),
+    current_user: User = Depends(get_current_user)
+):
+    query = payload.get("query", "").strip()
+    print("🔎 [SEARCH-NEWS] Query reçue :", query)
+    if not query:
+        raise HTTPException(400, "Query manquante")
+
+    params = {
+        "text": query,
+        "language": "fr",
+        "number": 5
+    }
+
+    try:
+        print("🌍 [SEARCH-NEWS] Appel World News API")
+        resp = requests.get(
+            "https://api.worldnewsapi.com/search-news",
+            headers={"x-api-key": WORLD_NEWS_API_KEY},
+            params=params,
+            timeout=10
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        print("✅ [SEARCH-NEWS] Réponse API OK")
+    except Exception as e:
+        raise HTTPException(502, f"Erreur World News API: {str(e)}")
+
+    articles = [
+        {
+            "title": a.get("title"),
+            "summary": a.get("summary") or a.get("text", "")[:400],
+            "url": a.get("url"),
+            "date": a.get("publish_date")
+        }
+        for a in data.get("news", [])
+    ]
+
+    return {
+        "query": query,
+        "count": len(articles),
+        "articles": articles
+    }
+
+@agent.tool
+def search_news_tool(ctx: RunContext, query: str) -> dict:
+    """
+    Recherche des articles récents via l’API interne /search-news
+    """
+    try:
+        resp = requests.post(
+            "http://localhost:8000/search-news",
+            headers={
+                "Authorization": f"Bearer {ctx.deps['token']}"
+            },
+            json={"query": query},
+            timeout=10
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {
+            "error": str(e),
+            "articles": [],
+            "count": 0
+        }
+
+
+@app.post("/chats/{chat_id}/generate-press-review")
+def generate_press_review_no_tool(
+    chat_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    theme = payload.get("theme")
+    if not theme:
+        raise HTTPException(
+            status_code=400,
+            detail="Un thème est requis pour générer la revue de presse."
+        )
+
+    chat = db.exec(
+        select(Chat).where(
+            (Chat.id == chat_id) &
+            (Chat.user_id == current_user.id)
+        )
+    ).first()
+
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat introuvable")
+
+    # --- Articles récupérés (RAG / API news) ---
+    articles_data = chat.top_news_articles or []
+
+    # Séparation articles
+    main_articles = articles_data[:10]
+    additional_articles = articles_data[10:]
+
+    def normalize_article(a: dict) -> dict:
+        return {
+            "title": a.get("title", "Titre indisponible"),
+            "summary": a.get("summary") or a.get("content") or "",
+            "url": a.get("url", "")
+        }
+
+    main_articles_formatted = [normalize_article(a) for a in main_articles]
+    additional_articles_formatted = [
+        normalize_article(a) for a in additional_articles
+    ]
+
+    # Résumé global
+    global_summary = (
+        f"Cette revue de presse présente une synthèse des actualités "
+        f"liées au thème « {theme} ». "
+        f"{len(main_articles_formatted)} articles principaux ont été analysés."
+    )
+
+    review_result = {
+        "title": f"Revue de presse — {theme}",
+        "summary": global_summary,
+        "articles": main_articles_formatted,
+        "additional_articles": additional_articles_formatted
+    }
+
+    # --- Sauvegarde ---
+    chat.press_review_title = review_result["title"]
+    chat.press_review_summary = review_result["summary"]
+    chat.press_review_articles = review_result["articles"]
+    chat.updated_at = datetime.utcnow()
+
+    db.add(chat)
+    db.commit()
+    db.refresh(chat)
+
+    return {
+        "message": "Revue de presse générée avec succès.",
+        "review": review_result
+    }
 
 # -------------------
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
 # -------------------
-
 
 @app.post("/top-news")
 def get_top_news(
@@ -542,145 +689,6 @@ def get_top_news(
         "articles": articles,
         "chat_id": chat.id if chat else None,
         "updated_at": now.isoformat()
-    }
-    
-@app.post("/search-news")
-def search_news(
-    payload: dict = Body(...),
-    current_user: User = Depends(get_current_user)
-):
-    query = payload.get("query", "").strip()
-    if not query:
-        raise HTTPException(400, "Query manquante")
-
-    params = {
-        "text": query,
-        "language": "fr",
-        "number": 5
-    }
-
-    try:
-        resp = requests.get(
-            "https://api.worldnewsapi.com/search-news",
-            headers={"x-api-key": WORLD_NEWS_API_KEY},
-            params=params,
-            timeout=10
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        raise HTTPException(502, f"Erreur World News API: {str(e)}")
-
-    articles = [
-        {
-            "title": a.get("title"),
-            "summary": a.get("summary") or a.get("text", "")[:400],
-            "url": a.get("url"),
-            "date": a.get("publish_date")
-        }
-        for a in data.get("news", [])
-    ]
-
-    return {
-        "query": query,
-        "count": len(articles),
-        "articles": articles
-    }
-
-@agent.tool
-def search_news_tool(ctx: RunContext, query: str) -> dict:
-    """
-    Recherche des articles récents via l’API interne /search-news
-    """
-    try:
-        resp = requests.post(
-            "http://localhost:8000/search-news",
-            headers={
-                "Authorization": f"Bearer {ctx.deps['token']}"
-            },
-            json={"query": query},
-            timeout=10
-        )
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        return {
-            "error": str(e),
-            "articles": [],
-            "count": 0
-        }
-
-
-@app.post("/chats/{chat_id}/generate-press-review")
-def generate_press_review_no_tool(
-    chat_id: int,
-    payload: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    theme = payload.get("theme")
-    if not theme:
-        raise HTTPException(
-            status_code=400,
-            detail="Un thème est requis pour générer la revue de presse."
-        )
-
-    chat = db.exec(
-        select(Chat).where(
-            (Chat.id == chat_id) &
-            (Chat.user_id == current_user.id)
-        )
-    ).first()
-
-    if not chat:
-        raise HTTPException(status_code=404, detail="Chat introuvable")
-
-    # --- Articles récupérés (RAG / API news) ---
-    articles_data = chat.top_news_articles or []
-
-    # Séparation articles
-    main_articles = articles_data[:10]
-    additional_articles = articles_data[10:]
-
-    def normalize_article(a: dict) -> dict:
-        return {
-            "title": a.get("title", "Titre indisponible"),
-            "summary": a.get("summary") or a.get("content") or "",
-            "url": a.get("url", "")
-        }
-
-    main_articles_formatted = [normalize_article(a) for a in main_articles]
-    additional_articles_formatted = [
-        normalize_article(a) for a in additional_articles
-    ]
-
-    # Résumé global
-    global_summary = (
-        f"Cette revue de presse présente une synthèse des actualités "
-        f"liées au thème « {theme} ». "
-        f"{len(main_articles_formatted)} articles principaux ont été analysés."
-    )
-
-    review_result = {
-        "title": f"Revue de presse — {theme}",
-        "summary": global_summary,
-        "articles": main_articles_formatted,
-        "additional_articles": additional_articles_formatted
-    }
-
-    # --- Sauvegarde ---
-    chat.press_review_title = review_result["title"]
-    chat.press_review_summary = review_result["summary"]
-    chat.press_review_articles = review_result["articles"]
-    chat.updated_at = datetime.utcnow()
-
-    db.add(chat)
-    db.commit()
-    db.refresh(chat)
-
-    return {
-        "message": "Revue de presse générée avec succès.",
-        "review": review_result
     }
     
 @app.get("/chats/{chat_id}/press-review")
