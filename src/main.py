@@ -34,6 +34,7 @@ app = FastAPI()
 origins = [
     "http://localhost:3000",
     "https://p14-news-foundry-frontend.vercel.app",
+    "https://p14-news-foundry-frontend.vercel.app/login",
 ]
 
 app.add_middleware(
@@ -559,25 +560,27 @@ def get_top_news(
         "Souhaitez-vous une revue de presse détaillée sur un sujet précis ?"
     )
     print("🤖 [top-news] Assistant message généré.")
-
+    
     # ============================
-    # Mise à jour du chat
+    # CRÉATION DU CHAT ICI
     # ============================
     now = datetime.utcnow()
-    chat = db.exec(
-        select(Chat)
-        .where(Chat.user_id == current_user.id)
-        .order_by(Chat.updated_at.desc())
-    ).first()
 
-    if chat:
-        chat.messages.append({"role": "user", "content": user_message})
-        chat.messages.append({"role": "assistant", "content": assistant_message})
-        chat.top_news_articles = articles
-        chat.updated_at = now
-        db.add(chat)
-        db.commit()
-        db.refresh(chat)
+    chat = Chat(
+        user_id=current_user.id,
+        title="Discussion du",
+        messages=[
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": assistant_message},
+        ],
+        top_news_articles=articles,
+        created_at=now,
+        updated_at=now
+    )
+
+    db.add(chat)
+    db.commit()
+    db.refresh(chat)
 
     # ============================
     # Réponse API
