@@ -300,6 +300,33 @@ def create_chat(
         "assistant_response": assistant_response,
         "messages": chat.messages
     }
+    
+@app.get("/chats/{chat_id}")
+def get_chat(
+    chat_id: int,
+    auth = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    user = auth["user"]
+
+    chat = db.exec(
+        select(Chat).where(
+            (Chat.id == chat_id) &
+            (Chat.user_id == user.id)
+        )
+    ).first()
+
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat introuvable")
+
+    return {
+        "chat_id": chat.id,
+        "title": chat.title,
+        "messages": chat.messages or [],
+        "created_at": chat.created_at.isoformat() if chat.created_at else None,
+        "updated_at": chat.updated_at.isoformat() if chat.updated_at else None,
+    }
+
 
 # -------------------
 # Ajouter un message via l'agent (avec tools)
@@ -313,26 +340,14 @@ def add_message(
 ):
     """
     Ajoute un message utilisateur dans un chat existant.
-    L'agent décide seul s'il doit appeler un tool (ex: search_news_tool).
+    L'agent décide seul s'il doit appeler un tool (search_news_tool).
     """
-
-    # ============================
-    # Auth
-    # ============================
+    
     user = auth["user"]
     token = auth["token"]
-
-    print("🔐 [AUTH] User :", user.email)
-    print("🔐 [AUTH] Token présent :", bool(token))
-
-    # ============================
-    # Message utilisateur
-    # ============================
     message_content = payload.get("message", "").strip()
     if not message_content:
         raise HTTPException(status_code=400, detail="Message requis")
-
-    print("💬 [USER MESSAGE] :", message_content)
 
     # ============================
     # Récupérer le chat
@@ -349,15 +364,11 @@ def add_message(
 
     messages = chat.messages or []
 
-    # Ajouter message utilisateur
     messages.append({
         "role": "user",
         "content": message_content
     })
-
-    # ============================
-    # Charger le system prompt
-    # ============================
+    
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else (
         "Tu es l’assistant NewsFoundry.\n\n"
@@ -373,10 +384,7 @@ def add_message(
         "- cite les titres des articles\n"
         "- réponds en français\n"
     )
-
-    # ============================
-    # Construire le prompt
-    # ============================
+    # Construire le prompt complet
     conversation = [
         {"role": "system", "content": system_prompt_text},
         *messages
@@ -386,22 +394,13 @@ def add_message(
         f"{m['role']}: {m['content']}" for m in conversation
     )
 
-    print("🧠 [AGENT] Prompt envoyé au LLM ↓↓↓")
-    print(raw_prompt)
-
-    # ============================
-    # Appel de l'agent (AVEC TOOLS)
-    # ============================
     try:
         result = agent.run_sync(
             user_prompt=raw_prompt,
             deps={
-                "token": token  # ✅ JWT réel
+                "token": token  
             }
         )
-
-        print("🧠 [AGENT] Result type :", type(result))
-        print("🧠 [AGENT] Result brut :", result)
 
         assistant_content = (
             result.data
@@ -420,9 +419,6 @@ def add_message(
             "Merci de réessayer."
         )
 
-    # ============================
-    # Sauvegarde réponse assistant
-    # ============================
     messages.append({
         "role": "assistant",
         "content": assistant_content
@@ -454,7 +450,8 @@ def add_message(
 @app.post("/search-news")
 def search_news(
     payload: dict = Body(...),
-    current_user: User = Depends(get_current_user)
+    auth = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     query = payload.get("query", "").strip()
     print("🔎 [SEARCH-NEWS] Query reçue :", query)
@@ -529,9 +526,11 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
 def generate_press_review_no_tool(
     chat_id: int,
     payload: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
+ 
+    user = auth["user"]
     theme = payload.get("theme")
     if not theme:
         raise HTTPException(
@@ -539,20 +538,21 @@ def generate_press_review_no_tool(
             detail="Un thème est requis pour générer la revue de presse."
         )
 
+    # ============================
+    # Récupération du chat
+    # ============================
     chat = db.exec(
         select(Chat).where(
             (Chat.id == chat_id) &
-            (Chat.user_id == current_user.id)
+            (Chat.user_id == user.id)
         )
     ).first()
 
     if not chat:
         raise HTTPException(status_code=404, detail="Chat introuvable")
 
-    # --- Articles récupérés (RAG / API news) ---
     articles_data = chat.top_news_articles or []
 
-    # Séparation articles
     main_articles = articles_data[:10]
     additional_articles = articles_data[10:]
 
@@ -568,7 +568,6 @@ def generate_press_review_no_tool(
         normalize_article(a) for a in additional_articles
     ]
 
-    # Résumé global
     global_summary = (
         f"Cette revue de presse présente une synthèse des actualités "
         f"liées au thème « {theme} ». "
@@ -582,7 +581,9 @@ def generate_press_review_no_tool(
         "additional_articles": additional_articles_formatted
     }
 
-    # --- Sauvegarde ---
+    # ============================
+    # Sauvegarde
+    # ============================
     chat.press_review_title = review_result["title"]
     chat.press_review_summary = review_result["summary"]
     chat.press_review_articles = review_result["articles"]
@@ -597,6 +598,7 @@ def generate_press_review_no_tool(
         "review": review_result
     }
 
+
 # -------------------
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
 # -------------------
@@ -609,9 +611,6 @@ def get_top_news(
 ):
     print("🔎 [top-news] Requête reçue :", payload)
 
-    # ============================
-    # Vérification de la clé API
-    # ============================
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(500, "Clé API World News non configurée")
 
@@ -620,9 +619,6 @@ def get_top_news(
         raise HTTPException(400, "Aucun message utilisateur fourni")
     print(f"👤 [top-news] Message utilisateur : {user_message}")
 
-    # ============================
-    # Fonction utilitaire pour récupérer les articles
-    # ============================
     def fetch_top_news(country="fr", language="fr", date=None):
         date = date or datetime.utcnow().strftime("%Y-%m-%d")
         params = {
@@ -688,9 +684,6 @@ def get_top_news(
     )
     print("🤖 [top-news] Assistant message généré.")
     
-    # ============================
-    # CRÉATION DU CHAT ICI
-    # ============================
     now = datetime.utcnow()
 
     chat = Chat(
@@ -709,9 +702,6 @@ def get_top_news(
     db.commit()
     db.refresh(chat)
 
-    # ============================
-    # Réponse API
-    # ============================
     return {
         "status": "success",
         "assistant_message": assistant_message,
