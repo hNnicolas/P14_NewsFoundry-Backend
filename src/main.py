@@ -499,9 +499,6 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
     """
     Recherche des articles récents via l’API interne /search-news
     """
-    print("🔧 [TOOL] search_news_tool CALLED")
-    print("🔍 [TOOL] Query :", query)
-    print("🔐 [TOOL] Token présent :", bool(ctx.deps.get("token")))
     try:
         resp = requests.post(
             "http://localhost:8000/search-news",
@@ -606,11 +603,11 @@ def generate_press_review_no_tool(
 @app.post("/top-news")
 def get_top_news(
     payload: dict = Body(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     print("🔎 [top-news] Requête reçue :", payload)
-
+    user = auth["user"]
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(500, "Clé API World News non configurée")
 
@@ -715,12 +712,13 @@ def get_top_news(
 def get_press_review(
     chat_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth = Depends(get_current_user)
 ):
+    user = auth["user"]
     chat = db.exec(
         select(Chat).where(
             (Chat.id == chat_id) &
-            (Chat.user_id == current_user.id)
+            (Chat.user_id == user.id)
         )
     ).first()
 
