@@ -294,163 +294,111 @@ def create_chat(
         "messages": chat.messages
     }
 
-
 # -------------------
-# Lister tous les chats
-# -------------------
-@app.get("/chats")
-def list_chats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    chats = db.exec(
-        select(Chat).where(Chat.user_id == current_user.id).order_by(Chat.updated_at.desc())
-    ).all()
-    return [
-        {
-            "chat_id": chat.id,
-            "title": chat.title,
-            "messages": chat.messages,
-            "created_at": chat.created_at.isoformat() if chat.created_at else None,
-            "updated_at": chat.updated_at.isoformat() if chat.updated_at else None
-        }
-        for chat in chats
-    ]
-
-# -------------------
-# Récupérer un chat
-# -------------------
-@app.get("/chats/{chat_id}")
-def get_chat(chat_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    chat = db.exec(select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))).first()
-    if not chat:
-        raise HTTPException(status_code=404, detail="Discussion introuvable")
-    return {
-        "chat_id": chat.id,
-        "title": chat.title,
-        "messages": chat.messages,
-        "created_at": chat.created_at.isoformat() if chat.created_at else None,
-        "updated_at": chat.updated_at.isoformat() if chat.updated_at else None
-    }
-
-# -------------------
-# Ajouter un message intelligent avec détection automatique de revue de presse
+# Ajouter un message via l'agent (avec tools)
 # -------------------
 @app.post("/chats/{chat_id}/messages")
-def add_message_smart(
+def add_message(
     chat_id: int,
     payload: dict,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Ajoute un message utilisateur dans un chat existant et retourne la réponse de l'agent.
-    L'agent détecte automatiquement toute demande de revue de presse et appelle le tool
-    'advanced_search_news' si nécessaire. Version avec debug étendu et fallback direct.
+    Ajoute un message utilisateur dans un chat existant.
+    L'agent décide seul s'il doit appeler un tool (ex: search_news_tool).
     """
     message_content = payload.get("message", "").strip()
     if not message_content:
         raise HTTPException(status_code=400, detail="Message requis")
 
-    # --- Récupérer le chat ---
-    chat = db.exec(select(Chat).where((Chat.id == chat_id) & (Chat.user_id == current_user.id))).first()
+    # -------------------
+    # Récupérer le chat
+    # -------------------
+    chat = db.exec(
+        select(Chat).where(
+            (Chat.id == chat_id) &
+            (Chat.user_id == current_user.id)
+        )
+    ).first()
+
     if not chat:
         raise HTTPException(status_code=404, detail="Discussion introuvable")
 
     messages = chat.messages or []
-    messages.append({"role": "user", "content": message_content})
 
-    # --- Charger ou créer system prompt intelligent ---
+    # Ajouter message utilisateur
+    messages.append({
+        "role": "user",
+        "content": message_content
+    })
+
+    # -------------------
+    # Charger le system prompt
+    # -------------------
     system_prompt_obj = db.exec(select(SystemPrompt)).first()
     system_prompt_text = system_prompt_obj.prompt_text if system_prompt_obj else (
-        "Tu es l'assistant NewsFoundry, expert en actualités et revues de presse. "
-        "Chaque fois que l'utilisateur demande des informations détaillées sur un sujet, "
-        "une revue de presse ou des articles récents, tu dois automatiquement appeler le tool "
-        "'advanced_search_news' avec le sujet exact. "
-        "Sois flexible : l'utilisateur peut formuler sa demande de manière naturelle. "
-        "Retourne toujours un résumé structuré : titre de la revue, synthèse générale, "
-        "liste d'articles avec titre et résumé, éventuellement le lien vers la source. "
-        "Si aucun sujet n'est clairement demandé, pose une question polie pour clarifier le sujet."
+        "Tu es l’assistant NewsFoundry.\n\n"
+        "Quand l’utilisateur demande :\n"
+        "- plus d’informations\n"
+        "- des détails supplémentaires\n"
+        "- approfondir un sujet\n"
+        "- des articles récents\n\n"
+        "Tu DOIS appeler le tool `search_news_tool` avec le sujet précis.\n\n"
+        "Après l’appel du tool :\n"
+        "- base ta réponse uniquement sur les articles retournés\n"
+        "- fais une synthèse claire et structurée\n"
+        "- cite les titres des articles\n"
+        "- réponds en français\n"
     )
 
-    # --- Conversion conversation en texte brut pour l'agent ---
-    raw_prompt = "\n".join([f"{m['role']}: {m['content']}" for m in [{"role": "system", "content": system_prompt_text}] + messages])
+    # -------------------
+    # Construire le prompt conversationnel
+    # -------------------
+    conversation = [
+        {"role": "system", "content": system_prompt_text},
+        *messages
+    ]
 
-    lowered = message_content.lower()
-    wants_review = bool(re.search(r"\b(revue de presse|revue|revue détaill|revue détaillée|revu[eé] de presse|détaill|détail)\b", lowered))
+    raw_prompt = "\n".join(
+        f"{m['role']}: {m['content']}" for m in conversation
+    )
 
-    topic = None
-    if wants_review:
-        topic = re.sub(r"(?i)\b(revue de presse|revue de|revue sur|revue:|revue|revue détaillée|revue détaill|détaillé|détaillée)\b", "", message_content)
-        topic = topic.strip(" .:,-\n\t")
-        if not topic or len(topic) < 3:
-          
-            m = re.search(r"-\s*(.+)", system_prompt_text)
-            if m:
-                topic = m.group(1).split("\n")[0].strip()
-        # final fallback: the entire user message
-        if not topic or len(topic) < 3:
-            topic = message_content
+    # -------------------
+    # Appel de l'agent (AVEC TOOLS)
+    # -------------------
+    try:
+        result = agent.run_sync(
+            user_prompt=raw_prompt,
+            deps={
+                "token": f"{payload.get('token')}"
+            },
+            max_iterations=3
+        )
 
-    assistant_content = None
+        assistant_content = (
+            result.data
+            if hasattr(result, "data")
+            else result.output
+            if hasattr(result, "output")
+            else str(result)
+        )
 
-    if wants_review and topic:
-        try:
-          
-            tool_result = advanced_search_news(None, topic)
+    except Exception as e:
+        print("❌ ERREUR AGENT :", e)
+        assistant_content = (
+            "⚠️ Je n’ai pas pu traiter votre demande pour le moment. "
+            "Merci de réessayer."
+        )
 
-            # Si le tool renvoie une erreur structurée
-            if isinstance(tool_result, dict) and tool_result.get("error"):
-                assistant_content = f"⚠️ Le moteur de recherche d'articles a retourné une erreur : {tool_result.get('error')}"
-            else:
-                # Formatter la réponse: titre + synthèse + liste d'articles
-                articles = tool_result.get("articles", []) if isinstance(tool_result, dict) else []
-                count = tool_result.get("count", len(articles)) if isinstance(tool_result, dict) else len(articles)
-                available = tool_result.get("available", count) if isinstance(tool_result, dict) else count
+    # -------------------
+    # Sauvegarde réponse assistant
+    # -------------------
+    messages.append({
+        "role": "assistant",
+        "content": assistant_content
+    })
 
-                title = f"Revue de presse — {topic}"
-                summary = f"Résultats trouvés : {count} (available: {available}). Voici une synthèse des premiers articles."
-                body_lines = [f"**{title}**", summary, ""]
-
-                # limiter pour affichage
-                for i, a in enumerate(articles[:10]):
-                    a_title = a.get("title") or a.get("headline") or "Titre indisponible"
-                    a_summary = (a.get("summary") or a.get("content") or "")[:400]
-                    a_url = a.get("url") or ""
-                    body_lines.append(f"{i+1}. {a_title}")
-                    if a_summary:
-                        body_lines.append(f"   Résumé: {a_summary}")
-                    if a_url:
-                        body_lines.append(f"   Source: {a_url}")
-                    body_lines.append("")
-
-                assistant_content = "\n".join(body_lines)
-
-        except Exception as e_tool:
-            print("ERROR: appel direct tool failed:", e_tool)
-            assistant_content = (
-                "⚠️ Impossible d'interroger le service de recherche d'articles pour le moment. "
-                "Je peux néanmoins essayer de répondre autrement."
-            )
-
-    else:
-        try:
-            result = agent.run_sync(user_prompt=raw_prompt, max_iterations=2)
-            try:
-                print("DEBUG: result dir():", dir(result)[:50])
-            except Exception:
-                pass
-
-            if isinstance(result, dict) and "content" in result:
-                assistant_content = result["content"]
-            else:
-                assistant_content = getattr(result, "data", None) or getattr(result, "output", None) or str(result)
-
-        except Exception as e_agent:
-            assistant_content = (
-                "⚠️ Je n'ai pas pu traiter votre demande pour le moment, "
-                "mais la conversation a bien été enregistrée."
-            )
-
-    # --- Ajouter réponse assistant à l'historique ---
-    messages.append({"role": "assistant", "content": assistant_content})
     try:
         chat.messages = json.loads(json.dumps(messages))
         chat.updated_at = datetime.utcnow()
@@ -459,15 +407,17 @@ def add_message_smart(
         db.refresh(chat)
     except Exception as e_db:
         db.rollback()
-        print("ERROR DB lors de la sauvegarde du chat:", e_db)
-        raise HTTPException(status_code=500, detail=f"Erreur DB: {str(e_db)}")
+        print("❌ ERREUR DB :", e_db)
+        raise HTTPException(
+            status_code=500,
+            detail="Erreur lors de la sauvegarde du message"
+        )
 
     return {
         "assistant_response": assistant_content,
-        "messages": chat.messages,
-        "system_prompt_used": system_prompt_text,
-        "user_prompt_received": message_content
+        "messages": chat.messages
     }
+
 
 # -------------------
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
@@ -593,6 +543,73 @@ def get_top_news(
         "chat_id": chat.id if chat else None,
         "updated_at": now.isoformat()
     }
+    
+@app.post("/search-news")
+def search_news(
+    payload: dict = Body(...),
+    current_user: User = Depends(get_current_user)
+):
+    query = payload.get("query", "").strip()
+    if not query:
+        raise HTTPException(400, "Query manquante")
+
+    params = {
+        "text": query,
+        "language": "fr",
+        "number": 5
+    }
+
+    try:
+        resp = requests.get(
+            "https://api.worldnewsapi.com/search-news",
+            headers={"x-api-key": WORLD_NEWS_API_KEY},
+            params=params,
+            timeout=10
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        raise HTTPException(502, f"Erreur World News API: {str(e)}")
+
+    articles = [
+        {
+            "title": a.get("title"),
+            "summary": a.get("summary") or a.get("text", "")[:400],
+            "url": a.get("url"),
+            "date": a.get("publish_date")
+        }
+        for a in data.get("news", [])
+    ]
+
+    return {
+        "query": query,
+        "count": len(articles),
+        "articles": articles
+    }
+
+@agent.tool
+def search_news_tool(ctx: RunContext, query: str) -> dict:
+    """
+    Recherche des articles récents via l’API interne /search-news
+    """
+    try:
+        resp = requests.post(
+            "http://localhost:8000/search-news",
+            headers={
+                "Authorization": f"Bearer {ctx.deps['token']}"
+            },
+            json={"query": query},
+            timeout=10
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {
+            "error": str(e),
+            "articles": [],
+            "count": 0
+        }
+
 
 @app.post("/chats/{chat_id}/generate-press-review")
 def generate_press_review_no_tool(
