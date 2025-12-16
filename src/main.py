@@ -34,7 +34,6 @@ app = FastAPI()
 origins = [
     "http://localhost:3000",
     "https://p14-news-foundry-frontend.vercel.app",
-    "https://p14-news-foundry-frontend.vercel.app/login",
 ]
 
 app.add_middleware(
@@ -480,7 +479,6 @@ def search_news(
     db: Session = Depends(get_db)
 ):
     query = payload.get("query", "").strip()
-    print("🔎 [SEARCH-NEWS] Query reçue :", query)
     if not query:
         raise HTTPException(400, "Query manquante")
 
@@ -491,7 +489,6 @@ def search_news(
     }
 
     try:
-        print("🌍 [SEARCH-NEWS] Appel World News API")
         resp = requests.get(
             "https://api.worldnewsapi.com/search-news",
             headers={"x-api-key": WORLD_NEWS_API_KEY},
@@ -534,7 +531,6 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
             json={"query": query},
             timeout=10
         )
-        print("📡 [TOOL] Status code :", resp.status_code)
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -632,7 +628,6 @@ def get_top_news(
     auth = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    print("🔎 [top-news] Requête reçue :", payload)
     user = auth["user"]
     if not WORLD_NEWS_API_KEY:
         raise HTTPException(500, "Clé API World News non configurée")
@@ -640,7 +635,6 @@ def get_top_news(
     user_message = payload.get("user_message", "").strip()
     if not user_message:
         raise HTTPException(400, "Aucun message utilisateur fourni")
-    print(f"👤 [top-news] Message utilisateur : {user_message}")
 
     def fetch_top_news(country="fr", language="fr", date=None):
         date = date or datetime.utcnow().strftime("%Y-%m-%d")
@@ -650,7 +644,6 @@ def get_top_news(
             "date": date,
             "max-news-per-cluster": 5
         }
-        print(f"🌍 [top-news] Appel API World News: country={country}, date={date}")
         try:
             resp = requests.get(
                 WORLD_NEWS_URL,
@@ -661,7 +654,6 @@ def get_top_news(
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
-            print("[top-news] Erreur API :", e)
             return []
 
         clusters = data.get("top_news", [])
@@ -684,7 +676,6 @@ def get_top_news(
     articles = fetch_top_news("fr", "fr")
     if not articles:
         # fallback US
-        print("⚠️ Aucun article FR — fallback US")
         articles = fetch_top_news("us", "en")
 
     if not articles:
