@@ -552,7 +552,7 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
 
 
 @app.post("/chats/{chat_id}/generate-press-review")
-def generate_press_review_no_tool(
+async def generate_press_review_no_tool(
     chat_id: int,
     payload: dict,
     auth=Depends(get_current_user),
@@ -603,17 +603,16 @@ Historique de la discussion :
 """
 
     # ============================
-    # Appel de l’agent IA
+    # Appel de l’agent IA (ASYNC)
     # ============================
     try:
-        result = press_review_agent.run(prompt)
+        result = await press_review_agent.run(prompt)
+        review_output: PressReviewOutputModel = result.output
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Erreur lors de la génération IA : {str(e)}"
         )
-
-    review_output: PressReviewOutputModel = result.output
 
     # ============================
     # Sauvegarde en base
