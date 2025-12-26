@@ -183,10 +183,20 @@ WORLD_NEWS_URL = "https://api.worldnewsapi.com/top-news"
 # -------------------
 # Agent Revue de Presse
 # -------------------
+
+class ArticleModel(BaseModel):
+    title: str
+    summary: str
+    url: str
+    
 class PressReviewOutputModel(BaseModel):
     title: str = Field(description="Titre de la revue de presse")
     summary: str = Field(description="Synthèse générale de la revue de presse")
     articles: list = Field(description="Liste des articles synthétisés, chaque article a title et summary")
+
+# -------------------
+# Agent Revue de Presse
+# -------------------
 
 press_review_agent = Agent(
     model="gpt-4o-mini",
@@ -195,17 +205,25 @@ press_review_agent = Agent(
 Tu es un journaliste professionnel.
 
 Ta mission :
-- Générer une revue de presse à partir de l'historique d'une discussion.
+- Générer une revue de presse à partir de l’historique d’une discussion.
+- Le thème fourni peut être n’importe quelle chaîne de caractères.
+- Le thème peut être explicite ou implicite dans la discussion.
+- Tu dois faire une analyse SÉMANTIQUE de l’historique.
+
+Contraintes STRICTES :
 - Utilise UNIQUEMENT les informations présentes dans le chat.
 - Ne fais AUCUNE recherche externe.
-- Synthétise, reformule et structure.
+- N’invente aucun fait.
+- Si le thème est partiellement traité, exploite ce qui est pertinent.
+- Si le thème n’apparaît pas du tout, explique-le clairement.
 
-Contraintes :
+Structure attendue :
 - Un titre clair
 - Une synthèse globale
-- Une liste d'articles synthétiques
+- Une liste d’articles synthétiques (titre + résumé)
 """
 )
+
 
 # -------------------
 # Routes simples
@@ -559,7 +577,7 @@ async def generate_press_review_no_tool(
     db: Session = Depends(get_db)
 ):
     user = auth["user"]
-    theme = payload.get("theme")
+    theme = (payload.get("theme") or "").strip()
 
     if not theme:
         raise HTTPException(
@@ -580,30 +598,35 @@ async def generate_press_review_no_tool(
     if not chat:
         raise HTTPException(status_code=404, detail="Chat introuvable")
 
-    if not chat.messages:
+    if not chat.messages or len(chat.messages) == 0:
         raise HTTPException(
             status_code=400,
-            detail="Impossible de générer une revue sans messages."
+            detail="Impossible de générer une revue sans historique de discussion."
         )
 
     # ============================
     # Construction de l’historique
     # ============================
     formatted_history = "\n".join(
-        f"{m.get('role', 'user')} : {m.get('content', '')}"
+        f"{m.get('role', 'user').upper()} : {m.get('content', '')}"
         for m in chat.messages
         if m.get("content")
     )
 
     prompt = f"""
-Thème de la revue de presse : {theme}
+Thème de la revue de presse :
+"{theme}"
 
 Historique de la discussion :
 {formatted_history}
+
+Tâche :
+- Identifie les passages liés au thème (même implicitement).
+- Rédige une revue de presse structurée.
 """
 
     # ============================
-    # Appel de l’agent IA (ASYNC)
+    # Appel IA (IMPORTANT : await)
     # ============================
     try:
         result = await press_review_agent.run(prompt)
@@ -621,11 +644,10 @@ Historique de la discussion :
     chat.press_review_summary = review_output.summary
     chat.press_review_articles = [
         {
-            "title": a.title,
-            "summary": a.summary,
-            "url": a.url
+            "title": article.title,
+            "summary": article.summary
         }
-        for a in review_output.articles
+        for article in review_output.articles
     ]
     chat.updated_at = datetime.utcnow()
 
@@ -639,8 +661,8 @@ Historique de la discussion :
     return {
         "message": "Revue de presse générée avec succès.",
         "review": {
-            "title": review_output.title,
-            "summary": review_output.summary,
+            "title": chat.press_review_title,
+            "summary": chat.press_review_summary,
             "articles": chat.press_review_articles
         }
     }
