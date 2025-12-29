@@ -77,32 +77,18 @@ class SystemPrompt(SQLModel, table=True):
 class PressReviewArticleModel(BaseModel):
     title: str = Field(..., description="Titre de l'article")
     summary: str = Field(..., description="Résumé de l'article")
-    url: Optional[str] = Field(None, description="URL source")
-
-    model_config = {
-        "json_schema_extra": {
-            "type": "object"
-        }
-    }
+    url: Optional[str] = Field(None, description="Source si disponible")
 
 
-class PressReviewOutputModel(BaseModel):
-    title: str = Field(..., description="Titre de la revue")
-    summary: str = Field(..., description="Synthèse générale")
-    articles: List[PressReviewArticleModel] = Field(
+class PressReviewArticlesWrapper(BaseModel):
+    items: List[PressReviewArticleModel] = Field(
         ..., description="Liste des articles"
     )
 
-    model_config = {
-        "json_schema_extra": {
-            "type": "object",
-            "properties": {
-                "articles": {
-                    "type": "array",
-                    "items": {
-                        "type": "object"
-                    }
-                }
-            }
-        }
-    }
+
+class PressReviewOutputModel(BaseModel):
+    title: str = Field(..., description="Titre de la revue de presse")
+    summary: str = Field(..., description="Synthèse générale")
+    articles: PressReviewArticlesWrapper = Field(
+        ..., description="Articles de la revue"
+    )

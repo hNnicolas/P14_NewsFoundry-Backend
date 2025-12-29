@@ -195,25 +195,10 @@ press_review_agent = Agent(
     system_prompt="""
 Tu es un journaliste professionnel.
 
-Tu dois retourner STRICTEMENT un JSON valide
-respectant ce schéma :
-
-{
-  "title": string,
-  "summary": string,
-  "articles": [
-    {
-      "title": string,
-      "summary": string,
-      "url": string | null
-    }
-  ]
-}
-
-Règles :
-- Utilise UNIQUEMENT l'historique fourni
-- Le thème est un GUIDAGE sémantique
-- Si une URL est inconnue, mets null
+Règles STRICTES :
+- Réponds UNIQUEMENT avec un JSON conforme au schéma
+- Aucune recherche externe
+- Base-toi uniquement sur l’historique fourni
 """
 )
 
@@ -570,14 +555,11 @@ async def generate_press_review(
     db: Session = Depends(get_db)
 ):
     user = auth["user"]
-    theme = str(payload.get("theme", "")).strip()
+    theme = payload.get("theme", "").strip()
 
     if not theme:
-        raise HTTPException(status_code=400, detail="Un thème est requis")
+        raise HTTPException(400, "Un thème est requis")
 
-    # ---------------------------
-    # Récupération du chat
-    # ---------------------------
     chat = db.exec(
         select(Chat).where(
             Chat.id == chat_id,
@@ -586,51 +568,33 @@ async def generate_press_review(
     ).first()
 
     if not chat:
-        raise HTTPException(status_code=404, detail="Chat introuvable")
+        raise HTTPException(404, "Chat introuvable")
 
-    if not chat.messages or len(chat.messages) == 0:
-        raise HTTPException(status_code=400, detail="Aucun message dans ce chat")
+    if not chat.messages:
+        raise HTTPException(400, "Aucun message dans ce chat")
 
-    # ---------------------------
-    # Construction historique
-    # ---------------------------
     history_text = "\n".join(
-        f"{m.get('role', 'user').upper()} : {m.get('content', '')}"
+        f"{m.get('role','user').upper()} : {m.get('content','')}"
         for m in chat.messages
         if m.get("content")
     )
 
-    if not history_text.strip():
-        raise HTTPException(400, "Historique vide exploitable")
-
-    # ---------------------------
-    # Prompt IA
-    # ---------------------------
     prompt = f"""
-Thème de la revue de presse :
-{theme}
+Thème : "{theme}"
 
-Historique de la discussion :
+Historique COMPLET de la discussion :
 {history_text}
 
 Consigne :
-Génère une revue de presse structurée basée UNIQUEMENT sur ces échanges.
+Génère une revue de presse structurée.
 """
 
-    # ---------------------------
-    # Appel IA
-    # ---------------------------
     try:
         result = await press_review_agent.run(prompt)
         review: PressReviewOutputModel = result.output
-    except Exception:
-        print("🔥 ERREUR IA PRESS REVIEW")
-        traceback.print_exc()
-        raise HTTPException(500, "Erreur lors de la génération IA")
+    except Exception as e:
+        raise HTTPException(500, f"Erreur IA : {str(e)}")
 
-    # ---------------------------
-    # Sauvegarde DB
-    # ---------------------------
     chat.press_review_title = review.title
     chat.press_review_summary = review.summary
     chat.press_review_articles = [
@@ -639,27 +603,22 @@ Génère une revue de presse structurée basée UNIQUEMENT sur ces échanges.
             "summary": a.summary,
             "url": a.url
         }
-        for a in review.articles
+        for a in review.articles.items
     ]
-
     chat.updated_at = datetime.utcnow()
 
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
-    # ---------------------------
-    # Réponse
-    # ---------------------------
     return {
-        "message": "Revue de presse générée avec succès",
+        "message": "Revue de presse générée",
         "review": {
             "title": chat.press_review_title,
             "summary": chat.press_review_summary,
             "articles": chat.press_review_articles
         }
     }
-
 
 # -------------------
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
