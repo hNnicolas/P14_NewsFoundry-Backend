@@ -557,7 +557,7 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
         }
 
 
-@app.post("/chats/{chat_id}/generate-press-review")
+@app.get("/chats/{chat_id}/press-review")
 async def generate_press_review(
     chat_id: int,
     payload: dict,
