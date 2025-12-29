@@ -189,26 +189,30 @@ class PressReviewOutputModel(BaseModel):
     articles: list = Field(description="Liste des articles synthétisés, chaque article a title et summary")
 
 press_review_agent = Agent(
-    model=MODEL_NAME,
+    model="gpt-4o-mini",
     output_type=PressReviewOutputModel,
     system_prompt="""
 Tu es un journaliste professionnel.
 
-Ta mission :
-- Générer une revue de presse à partir de l’historique COMPLET d’une discussion.
-- Le thème fourni est un ANGLE JOURNALISTIQUE, pas un mot-clé exact.
-- Tu dois analyser, comprendre et synthétiser les informations pertinentes.
+Tu dois retourner STRICTEMENT un JSON valide
+respectant ce schéma :
 
-Règles ABSOLUES :
-- Utilise UNIQUEMENT les informations présentes dans l’historique
-- Ne fais AUCUNE recherche externe
-- N’invente AUCUN fait
-- Reformule et structure comme une vraie revue de presse
+{
+  "title": string,
+  "summary": string,
+  "articles": [
+    {
+      "title": string,
+      "summary": string,
+      "url": string | null
+    }
+  ]
+}
 
-Structure attendue :
-1. Un titre clair
-2. Une synthèse générale
-3. Une liste d’articles synthétiques
+Règles :
+- Utilise UNIQUEMENT l'historique fourni
+- Le thème est un GUIDAGE sémantique
+- Si une URL est inconnue, mets null
 """
 )
 
@@ -565,11 +569,14 @@ async def generate_press_review(
     db: Session = Depends(get_db)
 ):
     user = auth["user"]
-    theme = payload.get("theme", "").strip()
+    theme = str(payload.get("theme", "")).strip()
 
     if not theme:
-        raise HTTPException(400, "Un thème est requis")
+        raise HTTPException(status_code=400, detail="Un thème est requis")
 
+    # ---------------------------
+    # Récupération du chat
+    # ---------------------------
     chat = db.exec(
         select(Chat).where(
             Chat.id == chat_id,
@@ -578,68 +585,79 @@ async def generate_press_review(
     ).first()
 
     if not chat:
-        raise HTTPException(404, "Chat introuvable")
+        raise HTTPException(status_code=404, detail="Chat introuvable")
 
-    if not chat.messages:
-        raise HTTPException(400, "Aucun message dans ce chat")
+    if not chat.messages or len(chat.messages) == 0:
+        raise HTTPException(status_code=400, detail="Aucun message dans ce chat")
 
-    # 🔹 Historique COMPLET (sans filtrer par thème)
+    # ---------------------------
+    # Construction historique
+    # ---------------------------
     history_text = "\n".join(
-        f"{m['role'].upper()} : {m['content']}"
+        f"{m.get('role', 'user').upper()} : {m.get('content', '')}"
         for m in chat.messages
         if m.get("content")
     )
 
+    if not history_text.strip():
+        raise HTTPException(400, "Historique vide exploitable")
+
+    # ---------------------------
+    # Prompt IA
+    # ---------------------------
     prompt = f"""
-Tu es un journaliste professionnel.
+Thème de la revue de presse :
+{theme}
 
-Thème demandé : "{theme}"
-
-Voici l'historique COMPLET de la discussion.
-Même si le thème n'est pas explicitement nommé, 
-utilise le CONTEXTE sémantique.
-
-Historique :
+Historique de la discussion :
 {history_text}
 
-Consignes :
-- Génère une revue de presse
-- Basée UNIQUEMENT sur ces messages
-- Structure : titre, synthèse, articles
+Consigne :
+Génère une revue de presse structurée basée UNIQUEMENT sur ces échanges.
 """
 
+    # ---------------------------
+    # Appel IA
+    # ---------------------------
     try:
         result = await press_review_agent.run(prompt)
         review: PressReviewOutputModel = result.output
-    except Exception as e:
-        raise HTTPException(500, f"Erreur IA : {str(e)}")
+    except Exception:
+        print("🔥 ERREUR IA PRESS REVIEW")
+        traceback.print_exc()
+        raise HTTPException(500, "Erreur lors de la génération IA")
 
-    # ✅ Sauvegarde
+    # ---------------------------
+    # Sauvegarde DB
+    # ---------------------------
     chat.press_review_title = review.title
     chat.press_review_summary = review.summary
     chat.press_review_articles = [
         {
             "title": a.title,
             "summary": a.summary,
-            "url": getattr(a, "url", "")
+            "url": a.url
         }
         for a in review.articles
     ]
+
     chat.updated_at = datetime.utcnow()
 
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
+    # ---------------------------
+    # Réponse
+    # ---------------------------
     return {
-        "message": "Revue de presse générée",
+        "message": "Revue de presse générée avec succès",
         "review": {
             "title": chat.press_review_title,
             "summary": chat.press_review_summary,
             "articles": chat.press_review_articles
         }
     }
-
 
 
 # -------------------
