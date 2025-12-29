@@ -546,7 +546,6 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
             "count": 0
         }
 
-
 @app.post("/chats/{chat_id}/generate-press-review")
 async def generate_press_review(
     chat_id: int,
@@ -554,10 +553,15 @@ async def generate_press_review(
     auth=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    print("🟢 [PRESS_REVIEW] Début génération")
+
     user = auth["user"]
     theme = payload.get("theme", "").strip()
 
+    print(f"🟡 [PRESS_REVIEW] User={user.id} | Chat={chat_id} | Theme='{theme}'")
+
     if not theme:
+        print("🔴 [PRESS_REVIEW] Thème manquant")
         raise HTTPException(400, "Un thème est requis")
 
     chat = db.exec(
@@ -567,8 +571,15 @@ async def generate_press_review(
         )
     ).first()
 
-    if not chat or not chat.messages:
-        raise HTTPException(404, "Chat introuvable ou vide")
+    if not chat:
+        print("🔴 [PRESS_REVIEW] Chat introuvable")
+        raise HTTPException(404, "Chat introuvable")
+
+    if not chat.messages:
+        print("🔴 [PRESS_REVIEW] Chat sans messages")
+        raise HTTPException(400, "Chat vide")
+
+    print(f"🟢 [PRESS_REVIEW] {len(chat.messages)} messages trouvés")
 
     history_text = "\n".join(
         f"{m.get('role','user').upper()} : {m.get('content','')}"
@@ -576,30 +587,42 @@ async def generate_press_review(
         if m.get("content")
     )
 
+    print(f"🟢 [PRESS_REVIEW] Historique prêt ({len(history_text)} caractères)")
+
     prompt = f"""
 Tu es un journaliste professionnel.
 
 Thème : "{theme}"
 
-Historique de la discussion :
+Historique :
 {history_text}
 
 Consignes :
 - Génère une revue de presse
-- Un titre
-- Une synthèse
-- Plusieurs articles
+- Titre
+- Synthèse
+- Articles
 """
 
     try:
+        print("🧠 [PRESS_REVIEW] Appel IA OpenAI...")
         result = await press_review_agent.run(prompt)
         review: PressReviewOutputModel = result.output
+        print("✅ [PRESS_REVIEW] Réponse IA reçue")
+
     except Exception as e:
-        print("🔥 ERREUR IA PRESS REVIEW")
+        print("🔥🔥🔥 [PRESS_REVIEW] ERREUR IA")
         traceback.print_exc()
+
+        # Cas spécial RATE LIMIT
+        if "rate limit" in str(e).lower() or "429" in str(e):
+            raise HTTPException(
+                429,
+                "Limite OpenAI atteinte. Réessayez plus tard."
+            )
+
         raise HTTPException(500, "Erreur IA lors de la génération")
 
-    # ✅ CORRECTION CRITIQUE ICI
     chat.press_review_title = review.title
     chat.press_review_summary = review.summary
     chat.press_review_articles = [
@@ -615,6 +638,8 @@ Consignes :
     db.add(chat)
     db.commit()
     db.refresh(chat)
+
+    print("💾 [PRESS_REVIEW] Revue sauvegardée en base")
 
     return {
         "message": "Revue de presse générée",
