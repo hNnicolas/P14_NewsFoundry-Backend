@@ -1,6 +1,7 @@
 import re
 import unicodedata
 import requests
+import traceback
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Header, Body
 from fastapi.middleware.cors import CORSMiddleware

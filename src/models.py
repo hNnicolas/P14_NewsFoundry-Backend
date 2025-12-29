@@ -75,12 +75,34 @@ class SystemPrompt(SQLModel, table=True):
 # Modèles IA (Pydantic)
 # --------------------------
 class PressReviewArticleModel(BaseModel):
-    title: str
-    summary: str
-    url: Optional[str] = None  
+    title: str = Field(..., description="Titre de l'article")
+    summary: str = Field(..., description="Résumé de l'article")
+    url: Optional[str] = Field(None, description="URL source")
+
+    model_config = {
+        "json_schema_extra": {
+            "type": "object"
+        }
+    }
 
 
 class PressReviewOutputModel(BaseModel):
-    title: str
-    summary: str
-    articles: List[PressReviewArticleModel]
+    title: str = Field(..., description="Titre de la revue")
+    summary: str = Field(..., description="Synthèse générale")
+    articles: List[PressReviewArticleModel] = Field(
+        ..., description="Liste des articles"
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "type": "object",
+            "properties": {
+                "articles": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                }
+            }
+        }
+    }
