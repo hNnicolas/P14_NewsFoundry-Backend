@@ -557,7 +557,7 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
         }
 
 
-@app.get("/chats/{chat_id}/press-review")
+@app.post("/chats/{chat_id}/generate-press-review")
 async def generate_press_review(
     chat_id: int,
     payload: dict,
@@ -570,9 +570,6 @@ async def generate_press_review(
     if not theme:
         raise HTTPException(400, "Un thème est requis")
 
-    # ============================
-    # Récupération du chat
-    # ============================
     chat = db.exec(
         select(Chat).where(
             Chat.id == chat_id,
@@ -586,9 +583,7 @@ async def generate_press_review(
     if not chat.messages:
         raise HTTPException(400, "Aucun message dans ce chat")
 
-    # ============================
-    # Construction de l’historique
-    # ============================
+    # 🔹 Historique COMPLET (sans filtrer par thème)
     history_text = "\n".join(
         f"{m['role'].upper()} : {m['content']}"
         for m in chat.messages
@@ -596,34 +591,37 @@ async def generate_press_review(
     )
 
     prompt = f"""
-Thème de la revue de presse :
-{theme}
+Tu es un journaliste professionnel.
 
-Historique de la discussion :
+Thème demandé : "{theme}"
+
+Voici l'historique COMPLET de la discussion.
+Même si le thème n'est pas explicitement nommé, 
+utilise le CONTEXTE sémantique.
+
+Historique :
 {history_text}
 
-Consigne :
-Génère une revue de presse structurée basée uniquement sur ces échanges.
+Consignes :
+- Génère une revue de presse
+- Basée UNIQUEMENT sur ces messages
+- Structure : titre, synthèse, articles
 """
 
-    # ============================
-    # Appel IA (CORRECT)
-    # ============================
     try:
         result = await press_review_agent.run(prompt)
         review: PressReviewOutputModel = result.output
     except Exception as e:
         raise HTTPException(500, f"Erreur IA : {str(e)}")
 
-    # ============================
-    # Sauvegarde DB
-    # ============================
+    # ✅ Sauvegarde
     chat.press_review_title = review.title
     chat.press_review_summary = review.summary
     chat.press_review_articles = [
         {
             "title": a.title,
-            "summary": a.summary
+            "summary": a.summary,
+            "url": getattr(a, "url", "")
         }
         for a in review.articles
     ]
@@ -633,17 +631,15 @@ Génère une revue de presse structurée basée uniquement sur ces échanges.
     db.commit()
     db.refresh(chat)
 
-    # ============================
-    # Réponse
-    # ============================
     return {
-        "message": "Revue de presse générée avec succès",
+        "message": "Revue de presse générée",
         "review": {
-            "title": review.title,
-            "summary": review.summary,
+            "title": chat.press_review_title,
+            "summary": chat.press_review_summary,
             "articles": chat.press_review_articles
         }
     }
+
 
 
 # -------------------
