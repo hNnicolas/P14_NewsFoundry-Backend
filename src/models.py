@@ -72,15 +72,13 @@ class SystemPrompt(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 # --------------------------
-# Modèles Pydantic pour la revue de presse (IA)
+# Modèles Pydantic IA
 # --------------------------
-class ArticleModel(BaseModel):
-    title: str
-    summary: str
-    url: str
+class PressReviewArticleModel(BaseModel):
+    title: str = Field(description="Titre de l'article")
+    summary: str = Field(description="Synthèse de l'article")
 
 class PressReviewOutputModel(BaseModel):
-    title: str
-    summary: str
-    articles: list[ArticleModel]
-
+    title: str = Field(description="Titre global de la revue de presse")
+    summary: str = Field(description="Synthèse générale")
+    articles: list[PressReviewArticleModel]
