@@ -75,20 +75,16 @@ class SystemPrompt(SQLModel, table=True):
 # Modèles IA (Pydantic)
 # --------------------------
 class PressReviewArticleModel(BaseModel):
-    title: str = Field(..., description="Titre de l'article")
-    summary: str = Field(..., description="Résumé de l'article")
-    url: Optional[str] = Field(None, description="Source si disponible")
+    title: str
+    summary: str
+    url: Optional[str] = None
 
 
 class PressReviewArticlesWrapper(BaseModel):
-    items: List[PressReviewArticleModel] = Field(
-        ..., description="Liste des articles"
-    )
+    items: List[PressReviewArticleModel]
 
 
 class PressReviewOutputModel(BaseModel):
-    title: str = Field(..., description="Titre de la revue de presse")
-    summary: str = Field(..., description="Synthèse générale")
-    articles: PressReviewArticlesWrapper = Field(
-        ..., description="Articles de la revue"
-    )
+    title: str
+    summary: str
+    articles: PressReviewArticlesWrapper

@@ -567,11 +567,8 @@ async def generate_press_review(
         )
     ).first()
 
-    if not chat:
-        raise HTTPException(404, "Chat introuvable")
-
-    if not chat.messages:
-        raise HTTPException(400, "Aucun message dans ce chat")
+    if not chat or not chat.messages:
+        raise HTTPException(404, "Chat introuvable ou vide")
 
     history_text = "\n".join(
         f"{m.get('role','user').upper()} : {m.get('content','')}"
@@ -580,21 +577,29 @@ async def generate_press_review(
     )
 
     prompt = f"""
+Tu es un journaliste professionnel.
+
 Thème : "{theme}"
 
-Historique COMPLET de la discussion :
+Historique de la discussion :
 {history_text}
 
-Consigne :
-Génère une revue de presse structurée.
+Consignes :
+- Génère une revue de presse
+- Un titre
+- Une synthèse
+- Plusieurs articles
 """
 
     try:
         result = await press_review_agent.run(prompt)
         review: PressReviewOutputModel = result.output
     except Exception as e:
-        raise HTTPException(500, f"Erreur IA : {str(e)}")
+        print("🔥 ERREUR IA PRESS REVIEW")
+        traceback.print_exc()
+        raise HTTPException(500, "Erreur IA lors de la génération")
 
+    # ✅ CORRECTION CRITIQUE ICI
     chat.press_review_title = review.title
     chat.press_review_summary = review.summary
     chat.press_review_articles = [
