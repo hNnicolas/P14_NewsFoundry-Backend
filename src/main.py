@@ -1,7 +1,6 @@
 import re
 import unicodedata
 import requests
-import traceback
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -190,18 +189,13 @@ class PressReviewOutputModel(BaseModel):
     articles: list = Field(description="Liste des articles synthétisés, chaque article a title et summary")
 
 press_review_agent = Agent(
-    model="gpt-4o-mini",
-    output_type=PressReviewOutputModel,
-    system_prompt="""
-Tu es un journaliste professionnel.
-
-Règles STRICTES :
-- Réponds UNIQUEMENT avec un JSON conforme au schéma
-- Aucune recherche externe
-- Base-toi uniquement sur l’historique fourni
-"""
+    model=MODEL_NAME,
+    system_prompt=(
+        "Tu es un assistant qui génère une revue de presse en français à partir "
+        "de l'historique de discussion. Structure la sortie comme un titre, une "
+        "synthèse générale, et des synthèses pour chaque article."
+    )
 )
-
 
 # -------------------
 # Routes simples
@@ -546,109 +540,83 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
             "count": 0
         }
 
+
 @app.post("/chats/{chat_id}/generate-press-review")
-async def generate_press_review(
+def generate_press_review_no_tool(
     chat_id: int,
     payload: dict,
-    auth=Depends(get_current_user),
+    auth = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    print("🟢 [PRESS_REVIEW] Début génération")
-
+ 
     user = auth["user"]
-    theme = payload.get("theme", "").strip()
-
-    print(f"🟡 [PRESS_REVIEW] User={user.id} | Chat={chat_id} | Theme='{theme}'")
-
+    theme = payload.get("theme")
     if not theme:
-        print("🔴 [PRESS_REVIEW] Thème manquant")
-        raise HTTPException(400, "Un thème est requis")
+        raise HTTPException(
+            status_code=400,
+            detail="Un thème est requis pour générer la revue de presse."
+        )
 
+    # ============================
+    # Récupération du chat
+    # ============================
     chat = db.exec(
         select(Chat).where(
-            Chat.id == chat_id,
-            Chat.user_id == user.id
+            (Chat.id == chat_id) &
+            (Chat.user_id == user.id)
         )
     ).first()
 
     if not chat:
-        print("🔴 [PRESS_REVIEW] Chat introuvable")
-        raise HTTPException(404, "Chat introuvable")
+        raise HTTPException(status_code=404, detail="Chat introuvable")
 
-    if not chat.messages:
-        print("🔴 [PRESS_REVIEW] Chat sans messages")
-        raise HTTPException(400, "Chat vide")
+    articles_data = chat.top_news_articles or []
 
-    print(f"🟢 [PRESS_REVIEW] {len(chat.messages)} messages trouvés")
+    main_articles = articles_data[:10]
+    additional_articles = articles_data[10:]
 
-    history_text = "\n".join(
-        f"{m.get('role','user').upper()} : {m.get('content','')}"
-        for m in chat.messages
-        if m.get("content")
+    def normalize_article(a: dict) -> dict:
+        return {
+            "title": a.get("title", "Titre indisponible"),
+            "summary": a.get("summary") or a.get("content") or "",
+            "url": a.get("url", "")
+        }
+
+    main_articles_formatted = [normalize_article(a) for a in main_articles]
+    additional_articles_formatted = [
+        normalize_article(a) for a in additional_articles
+    ]
+
+    global_summary = (
+        f"Cette revue de presse présente une synthèse des actualités "
+        f"liées au thème « {theme} ». "
+        f"{len(main_articles_formatted)} articles principaux ont été analysés."
     )
 
-    print(f"🟢 [PRESS_REVIEW] Historique prêt ({len(history_text)} caractères)")
+    review_result = {
+        "title": f"Revue de presse — {theme}",
+        "summary": global_summary,
+        "articles": main_articles_formatted,
+        "additional_articles": additional_articles_formatted
+    }
 
-    prompt = f"""
-Tu es un journaliste professionnel.
-
-Thème : "{theme}"
-
-Historique :
-{history_text}
-
-Consignes :
-- Génère une revue de presse
-- Titre
-- Synthèse
-- Articles
-"""
-
-    try:
-        print("🧠 [PRESS_REVIEW] Appel IA OpenAI...")
-        result = await press_review_agent.run(prompt)
-        review: PressReviewOutputModel = result.output
-        print("✅ [PRESS_REVIEW] Réponse IA reçue")
-
-    except Exception as e:
-        print("🔥🔥🔥 [PRESS_REVIEW] ERREUR IA")
-        traceback.print_exc()
-
-        # Cas spécial RATE LIMIT
-        if "rate limit" in str(e).lower() or "429" in str(e):
-            raise HTTPException(
-                429,
-                "Limite OpenAI atteinte. Réessayez plus tard."
-            )
-
-        raise HTTPException(500, "Erreur IA lors de la génération")
-
-    chat.press_review_title = review.title
-    chat.press_review_summary = review.summary
-    chat.press_review_articles = [
-        {
-            "title": a.title,
-            "summary": a.summary,
-            "url": a.url
-        }
-        for a in review.articles.items
-    ]
+    # ============================
+    # Sauvegarde
+    # ============================
+    chat.press_review_title = review_result["title"]
+    chat.press_review_summary = review_result["summary"]
+    chat.press_review_articles = review_result["articles"]
     chat.updated_at = datetime.utcnow()
 
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
-    print("💾 [PRESS_REVIEW] Revue sauvegardée en base")
-
     return {
-        "message": "Revue de presse générée",
-        "review": {
-            "title": chat.press_review_title,
-            "summary": chat.press_review_summary,
-            "articles": chat.press_review_articles
-        }
+        "message": "Revue de presse générée avec succès.",
+        "review": review_result
     }
+
 
 # -------------------
 # Endpoint pour récupérer les actualités et mettre à jour le prompt système
