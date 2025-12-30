@@ -80,11 +80,7 @@ class PressReviewArticleModel(BaseModel):
     url: Optional[str] = None
 
 
-class PressReviewArticlesWrapper(BaseModel):
-    items: List[PressReviewArticleModel]
-
-
 class PressReviewOutputModel(BaseModel):
     title: str
     summary: str
-    articles: PressReviewArticlesWrapper
+    articles: List[PressReviewArticleModel]
