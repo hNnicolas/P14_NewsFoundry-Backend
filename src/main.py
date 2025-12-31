@@ -552,7 +552,6 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
             "count": 0
         }
 
-
 @app.post("/chats/{chat_id}/generate-press-review")
 async def generate_press_review(
     chat_id: int,
@@ -577,7 +576,7 @@ async def generate_press_review(
         raise HTTPException(404, "Chat introuvable ou vide")
 
     history_text = "\n".join(
-        f"{m.get('role', 'user').upper()} : {m.get('content', '')}"
+        f"{m.get('role','user').upper()} : {m.get('content','')}"
         for m in chat.messages
         if m.get("content")
     )
@@ -588,33 +587,27 @@ Thème : {theme}
 Historique de la discussion :
 {history_text}
 
-Génère une revue de presse structurée.
+Génère une revue de presse structurée avec 3 à 5 articles.
 """
 
     try:
         result = await press_review_agent.run(prompt)
         review: PressReviewOutputModel = result.output
     except Exception as e:
-        print("❌ Erreur IA :", e)
-
+        print("❌ IA indisponible :", e)
         review = PressReviewOutputModel(
             title=f"Revue de presse – {theme}",
             summary="Synthèse générée à partir de l’historique du chat.",
             articles=build_articles_from_chat(chat.messages)
         )
 
-    # Sécurité ultime
     if not review.articles:
         review.articles = build_articles_from_chat(chat.messages)
 
     chat.press_review_title = review.title
     chat.press_review_summary = review.summary
-    chat.press_review_articles = [
-        a.model_dump() for a in review.articles
-    ]
+    chat.press_review_articles = [a.model_dump() for a in review.articles]
     chat.updated_at = datetime.utcnow()
-
-    print("🧾 PRESS REVIEW SAUVEGARDÉE :", review.model_dump())
 
     db.add(chat)
     db.commit()
@@ -625,6 +618,7 @@ Génère une revue de presse structurée.
         "summary": chat.press_review_summary,
         "articles": chat.press_review_articles
     }
+
 
 
 # -------------------
