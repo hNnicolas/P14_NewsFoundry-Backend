@@ -578,23 +578,34 @@ async def generate_press_review(
         raise HTTPException(404, "Chat introuvable ou vide")
 
     history_text = "\n".join(
-        f"{m['role'].upper()} : {m['content']}"
+        f"{m.get('role', 'user').upper()} : {m.get('content', '')}"
         for m in chat.messages
         if m.get("content")
     )
 
     prompt = f"""
+Tu es un journaliste professionnel.
+
 Thème de la revue de presse : {theme}
 
 Historique de la discussion :
 {history_text}
+
+Consignes :
+- Un titre clair
+- Une synthèse générale
+- Plusieurs articles courts
 """
 
     try:
         result = await press_review_agent.run(prompt)
         review: PressReviewOutputModel = result.output
-    except Exception as e:
-        raise HTTPException(500, f"Erreur IA : {str(e)}")
+    except Exception:
+        review = PressReviewOutputModel(
+            title=f"Revue de presse – {theme}",
+            summary="La revue de presse n’a pas pu être générée automatiquement.",
+            articles=[]
+        )
 
     chat.press_review_title = review.title
     chat.press_review_summary = review.summary
@@ -602,6 +613,8 @@ Historique de la discussion :
         a.model_dump() for a in review.articles
     ]
     chat.updated_at = datetime.utcnow()
+
+    print("🧾 PRESS REVIEW SAUVEGARDÉE :", review.model_dump())
 
     db.add(chat)
     db.commit()
