@@ -189,12 +189,25 @@ class PressReviewOutputModel(BaseModel):
     articles: list = Field(description="Liste des articles synthétisés, chaque article a title et summary")
 
 press_review_agent = Agent(
-    model=MODEL_NAME,
-    system_prompt=(
-        "Tu es un assistant qui génère une revue de presse en français à partir "
-        "de l'historique de discussion. Structure la sortie comme un titre, une "
-        "synthèse générale, et des synthèses pour chaque article."
-    )
+    model=os.getenv("PYDANTIC_AI_MODEL", "openai:gpt-4o-mini"),
+    output_type=PressReviewOutputModel,
+    system_prompt="""
+Tu es un journaliste professionnel.
+
+Ta mission est de produire une revue de presse
+à partir d’un historique de discussion.
+
+Règles STRICTES :
+- Réponds uniquement au format demandé
+- Pas de texte hors structure
+- Synthèse claire, factuelle, neutre
+- Articles courts (3–5 maximum)
+
+Structure attendue :
+- title
+- summary
+- articles (title, summary, url optionnelle)
+"""
 )
 
 # -------------------
@@ -542,70 +555,52 @@ def search_news_tool(ctx: RunContext, query: str) -> dict:
 
 
 @app.post("/chats/{chat_id}/generate-press-review")
-def generate_press_review_no_tool(
+async def generate_press_review(
     chat_id: int,
     payload: dict,
-    auth = Depends(get_current_user),
+    auth=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
- 
     user = auth["user"]
-    theme = payload.get("theme")
-    if not theme:
-        raise HTTPException(
-            status_code=400,
-            detail="Un thème est requis pour générer la revue de presse."
-        )
+    theme = payload.get("theme", "").strip()
 
-    # ============================
-    # Récupération du chat
-    # ============================
+    if not theme:
+        raise HTTPException(400, "Un thème est requis")
+
     chat = db.exec(
         select(Chat).where(
-            (Chat.id == chat_id) &
-            (Chat.user_id == user.id)
+            Chat.id == chat_id,
+            Chat.user_id == user.id
         )
     ).first()
 
-    if not chat:
-        raise HTTPException(status_code=404, detail="Chat introuvable")
+    if not chat or not chat.messages:
+        raise HTTPException(404, "Chat introuvable ou vide")
 
-    articles_data = chat.top_news_articles or []
-
-    main_articles = articles_data[:10]
-    additional_articles = articles_data[10:]
-
-    def normalize_article(a: dict) -> dict:
-        return {
-            "title": a.get("title", "Titre indisponible"),
-            "summary": a.get("summary") or a.get("content") or "",
-            "url": a.get("url", "")
-        }
-
-    main_articles_formatted = [normalize_article(a) for a in main_articles]
-    additional_articles_formatted = [
-        normalize_article(a) for a in additional_articles
-    ]
-
-    global_summary = (
-        f"Cette revue de presse présente une synthèse des actualités "
-        f"liées au thème « {theme} ». "
-        f"{len(main_articles_formatted)} articles principaux ont été analysés."
+    history_text = "\n".join(
+        f"{m['role'].upper()} : {m['content']}"
+        for m in chat.messages
+        if m.get("content")
     )
 
-    review_result = {
-        "title": f"Revue de presse — {theme}",
-        "summary": global_summary,
-        "articles": main_articles_formatted,
-        "additional_articles": additional_articles_formatted
-    }
+    prompt = f"""
+Thème de la revue de presse : {theme}
 
-    # ============================
-    # Sauvegarde
-    # ============================
-    chat.press_review_title = review_result["title"]
-    chat.press_review_summary = review_result["summary"]
-    chat.press_review_articles = review_result["articles"]
+Historique de la discussion :
+{history_text}
+"""
+
+    try:
+        result = await press_review_agent.run(prompt)
+        review: PressReviewOutputModel = result.output
+    except Exception as e:
+        raise HTTPException(500, f"Erreur IA : {str(e)}")
+
+    chat.press_review_title = review.title
+    chat.press_review_summary = review.summary
+    chat.press_review_articles = [
+        a.model_dump() for a in review.articles
+    ]
     chat.updated_at = datetime.utcnow()
 
     db.add(chat)
@@ -613,9 +608,14 @@ def generate_press_review_no_tool(
     db.refresh(chat)
 
     return {
-        "message": "Revue de presse générée avec succès.",
-        "review": review_result
+        "message": "Revue de presse générée",
+        "review": {
+            "title": review.title,
+            "summary": review.summary,
+            "articles": chat.press_review_articles
+        }
     }
+
 
 
 # -------------------

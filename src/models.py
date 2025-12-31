@@ -74,13 +74,13 @@ class SystemPrompt(SQLModel, table=True):
 # --------------------------
 # Modèles Pydantic pour la revue de presse (IA)
 # --------------------------
-class ArticleModel(BaseModel):
+class PressReviewArticleModel(BaseModel):
     title: str
     summary: str
-    url: str
+    url: Optional[str] = None
 
 class PressReviewOutputModel(BaseModel):
     title: str
     summary: str
-    articles: list[ArticleModel]
+    articles: List[PressReviewArticleModel]
 
