@@ -197,11 +197,10 @@ Tu es un journaliste professionnel.
 Ta mission est de produire une revue de presse
 à partir d’un historique de discussion.
 
-Règles STRICTES :
-- Réponds uniquement au format demandé
-- Pas de texte hors structure
-- Synthèse claire, factuelle, neutre
-- Articles courts (3–5 maximum)
+Règles :
+- 3 à 5 articles MAXIMUM
+- Chaque article doit avoir un title et un summary
+- Style neutre, journalistique
 
 Structure attendue :
 - title
@@ -584,28 +583,29 @@ async def generate_press_review(
     )
 
     prompt = f"""
-Tu es un journaliste professionnel.
-
-Thème de la revue de presse : {theme}
+Thème : {theme}
 
 Historique de la discussion :
 {history_text}
 
-Consignes :
-- Un titre clair
-- Une synthèse générale
-- Plusieurs articles courts
+Génère une revue de presse structurée.
 """
 
     try:
         result = await press_review_agent.run(prompt)
         review: PressReviewOutputModel = result.output
-    except Exception:
+    except Exception as e:
+        print("❌ Erreur IA :", e)
+
         review = PressReviewOutputModel(
             title=f"Revue de presse – {theme}",
-            summary="La revue de presse n’a pas pu être générée automatiquement.",
-            articles=[]
+            summary="Synthèse générée à partir de l’historique du chat.",
+            articles=build_articles_from_chat(chat.messages)
         )
+
+    # Sécurité ultime
+    if not review.articles:
+        review.articles = build_articles_from_chat(chat.messages)
 
     chat.press_review_title = review.title
     chat.press_review_summary = review.summary
@@ -621,14 +621,10 @@ Consignes :
     db.refresh(chat)
 
     return {
-        "message": "Revue de presse générée",
-        "review": {
-            "title": review.title,
-            "summary": review.summary,
-            "articles": chat.press_review_articles
-        }
+        "title": chat.press_review_title,
+        "summary": chat.press_review_summary,
+        "articles": chat.press_review_articles
     }
-
 
 
 # -------------------

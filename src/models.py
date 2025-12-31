@@ -79,8 +79,10 @@ class PressReviewArticleModel(BaseModel):
     summary: str
     url: Optional[str] = None
 
+
 class PressReviewOutputModel(BaseModel):
     title: str
     summary: str
     articles: List[PressReviewArticleModel]
+
 
