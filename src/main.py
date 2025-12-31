@@ -732,21 +732,26 @@ def get_press_review(
     auth = Depends(get_current_user)
 ):
     user = auth["user"]
+
     chat = db.exec(
         select(Chat).where(
-            (Chat.id == chat_id) &
-            (Chat.user_id == user.id)
+            Chat.id == chat_id,
+            Chat.user_id == user.id
         )
     ).first()
 
-    if not chat or not chat.press_review_articles:
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat introuvable")
+
+    if not chat.press_review_title:
         raise HTTPException(status_code=404, detail="Revue introuvable")
 
     return {
         "title": chat.press_review_title,
         "summary": chat.press_review_summary,
-        "articles": chat.press_review_articles
+        "articles": chat.press_review_articles or []
     }
+
     
 # -------------------
 # Lancement du serveur
